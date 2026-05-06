@@ -1,6 +1,7 @@
 import {ReactElement, useEffect, useState} from "react";
 import {StageBase, StageResponse, InitialData, Message} from "@chub-ai/stages-ts";
 import {LoadResponse} from "@chub-ai/stages-ts/dist/types/load";
+import {inferStatsFromCharacter, inferAttributesFromCharacter, loadCharacterYAML, InferredStats} from "./characterStats";
 
 type AnyRecord = {[key: string]: any};
 
@@ -31,6 +32,7 @@ type CharacterStatus = {
     journey: string;
     goal: string;
     threat: string;
+    injuriesAndTrauma: string;
     tension: TensionEntry[];
 };
 
@@ -48,8 +50,172 @@ type CharacterStatusBoardProps = {
     initialStatuses: CharacterStatus[];
 };
 
+type DiceRoll = {
+    dice: number[];
+    modifiers: number;
+};
+
+function DiceRoller({statuses, onUpdateStatus}: {statuses: CharacterStatus[]; onUpdateStatus: (characterId: string, field: keyof Omit<CharacterStatus, "id" | "tension">, value: string) => void}): ReactElement {
+    const [selectedCharacterId, setSelectedCharacterId] = useState<string>(statuses[0]?.id ?? "");
+    const [selectedAttribute, setSelectedAttribute] = useState<string>("strength");
+    const [modifiers, setModifiers] = useState<number>(0);
+    const [rollHistory, setRollHistory] = useState<DiceRoll[]>([]);
+    const [lastRoll, setLastRoll] = useState<DiceRoll | null>(null);
+    const [hopePenalty, setHopePenalty] = useState<number>(0);
+
+    const attributes = ["strength", "agility", "wits", "empathy"];
+
+    function rollDice(baseCount: number): number[] {
+        const dice: number[] = [];
+        for (let i = 0; i < baseCount; i++) {
+            dice.push(Math.floor(Math.random() * 6) + 1);
+        }
+        return dice;
+    }
+
+    function handleRoll(): void {
+        const diceCount = Math.max(1, 6 + modifiers);
+        const dice = rollDice(diceCount);
+        const roll: DiceRoll = {dice, modifiers};
+        setLastRoll(roll);
+        setRollHistory([roll, ...rollHistory]);
+        setHopePenalty(0);
+    }
+
+    function handlePush(): void {
+        if (!lastRoll) return;
+        const rerollable = lastRoll.dice.filter((d) => d !== 1 && d !== 6);
+        if (rerollable.length === 0) {
+            setLastRoll({...lastRoll, dice: lastRoll.dice});
+            return;
+        }
+        const rerolled = rollDice(rerollable.length);
+        const newOnes = rerolled.filter((d) => d === 1).length;
+        const allDice = lastRoll.dice.filter((d) => d === 1 || d === 6).concat(rerolled);
+        const updatedRoll: DiceRoll = {dice: allDice, modifiers: lastRoll.modifiers};
+        setLastRoll(updatedRoll);
+        setRollHistory([updatedRoll, ...rollHistory]);
+        setHopePenalty(newOnes);
+
+        if (newOnes > 0 && selectedCharacterId) {
+            const selected = statuses.find((s) => s.id === selectedCharacterId);
+            if (selected) {
+                const currentHope = parseInt(selected.hope, 10) || 0;
+                const newHope = Math.max(0, currentHope - newOnes);
+                onUpdateStatus(selectedCharacterId, "hope", String(newHope));
+            }
+        }
+    }
+
+    const selected = statuses.find((s) => s.id === selectedCharacterId);
+    const successCount = lastRoll ? lastRoll.dice.filter((d) => d === 6).length : 0;
+    const partialCount = lastRoll ? lastRoll.dice.filter((d) => d >= 4 && d <= 5).length : 0;
+
+    return <div style={{
+        width: "100vw",
+        height: "100vh",
+        boxSizing: "border-box",
+        overflowY: "auto",
+        background: "linear-gradient(160deg, #f7f0df 0%, #d5e6f8 55%, #f4f7e8 100%)",
+        padding: "1.5rem",
+        color: "#1f2a3d",
+        fontFamily: "\"Trebuchet MS\", \"Segoe UI\", sans-serif"
+    }}>
+        <div style={{maxWidth: "900px", margin: "0 auto"}}>
+            <h1 style={{margin: "0 0 1rem 0"}}>Dice Roller</h1>
+
+            <div style={{
+                border: "1px solid #98aec7",
+                borderRadius: "14px",
+                padding: "1rem",
+                background: "rgba(255, 255, 255, 0.84)",
+                boxShadow: "0 10px 26px rgba(37, 67, 102, 0.14)",
+                marginBottom: "1rem"
+            }}>
+                <div style={{display: "grid", gap: "0.75rem"}}>
+                    <label>Character
+                        <select value={selectedCharacterId} onChange={(e) => setSelectedCharacterId(e.target.value)} style={{width: "100%"}}>
+                            {statuses.map((s) => <option key={s.id} value={s.id}>{s.name || `Character ${s.id}`}</option>)}
+                        </select>
+                    </label>
+                    <label>Attribute
+                        <select value={selectedAttribute} onChange={(e) => setSelectedAttribute(e.target.value)} style={{width: "100%"}}>
+                            {attributes.map((attr) => <option key={attr} value={attr}>{attr.charAt(0).toUpperCase() + attr.slice(1)}</option>)}
+                        </select>
+                    </label>
+                    <label>Modifiers (add/remove dice)
+                        <div style={{display: "flex", gap: "0.5rem"}}>
+                            <button onClick={() => setModifiers((m) => m - 1)}>−</button>
+                            <input type="number" value={modifiers} onChange={(e) => setModifiers(parseInt(e.target.value, 10) || 0)} style={{flex: 1}} />
+                            <button onClick={() => setModifiers((m) => m + 1)}>+</button>
+                        </div>
+                    </label>
+                    <div><strong>Dice to roll:</strong> {Math.max(1, 6 + modifiers)}</div>
+                </div>
+                <button onClick={handleRoll} style={{marginTop: "1rem", padding: "0.5rem 1rem", background: "#4CAF50", color: "white", border: "none", borderRadius: "6px", cursor: "pointer"}}>Roll</button>
+            </div>
+
+            {lastRoll && (
+                <div style={{
+                    border: "1px solid #98aec7",
+                    borderRadius: "14px",
+                    padding: "1rem",
+                    background: "rgba(255, 255, 255, 0.84)",
+                    boxShadow: "0 10px 26px rgba(37, 67, 102, 0.14)",
+                    marginBottom: "1rem"
+                }}>
+                    <h2>Last Roll</h2>
+                    <div style={{display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem"}}>
+                        {lastRoll.dice.map((d, i) => (
+                            <div key={i} style={{
+                                width: "40px",
+                                height: "40px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                border: "2px solid #333",
+                                borderRadius: "4px",
+                                background: d === 6 ? "#90EE90" : d >= 4 ? "#FFD700" : d === 1 ? "#FFB6C6" : "#E8E8E8",
+                                fontWeight: "bold"
+                            }}>
+                                {d}
+                            </div>
+                        ))}
+                    </div>
+                    <div style={{marginBottom: "0.5rem"}}><strong>Successes (6s):</strong> {successCount}</div>
+                    <div style={{marginBottom: "0.5rem"}}><strong>Partial (4-5s):</strong> {partialCount}</div>
+                    {hopePenalty > 0 && <div style={{color: "#d9534f"}}><strong>Hope penalty from push:</strong> −{hopePenalty}</div>}
+                    <button onClick={handlePush} style={{marginTop: "0.75rem", padding: "0.5rem 1rem", background: "#FF9800", color: "white", border: "none", borderRadius: "6px", cursor: "pointer"}}>Push Roll</button>
+                </div>
+            )}
+
+            {rollHistory.length > 1 && (
+                <div style={{
+                    border: "1px solid #98aec7",
+                    borderRadius: "14px",
+                    padding: "1rem",
+                    background: "rgba(255, 255, 255, 0.84)",
+                    boxShadow: "0 10px 26px rgba(37, 67, 102, 0.14)"
+                }}>
+                    <h2>Roll History</h2>
+                    <div style={{display: "grid", gap: "0.5rem"}}>
+                        {rollHistory.slice(1).map((roll, i) => {
+                            const successes = roll.dice.filter((d) => d === 6).length;
+                            return <div key={i} style={{display: "flex", gap: "0.5rem", alignItems: "center", padding: "0.5rem", background: "#f9f9f9", borderRadius: "4px"}}>
+                                <div style={{flex: 1}}>Roll {rollHistory.length - i - 1}: {roll.dice.join(", ")}</div>
+                                <div style={{minWidth: "100px"}}>Successes: {successes}</div>
+                            </div>;
+                        })}
+                    </div>
+                </div>
+            )}
+        </div>
+    </div>;
+}
+
 function CharacterStatusBoard({initialStatuses}: CharacterStatusBoardProps): ReactElement {
     const [statuses, setStatuses] = useState<CharacterStatus[]>(initialStatuses);
+    const [view, setView] = useState<"status" | "roller">("status");
 
     useEffect(() => {
         setStatuses(initialStatuses);
@@ -81,6 +247,10 @@ function CharacterStatusBoard({initialStatuses}: CharacterStatusBoardProps): Rea
         }));
     }
 
+    if (view === "roller") {
+        return <DiceRoller statuses={statuses} onUpdateStatus={updateField} />;
+    }
+
     return <div style={{
         width: "100vw",
         height: "100vh",
@@ -95,7 +265,12 @@ function CharacterStatusBoard({initialStatuses}: CharacterStatusBoardProps): Rea
             maxWidth: "1200px",
             margin: "0 auto"
         }}>
-            <h1 style={{margin: "0 0 0.5rem 0"}}>Character Status Window</h1>
+            <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem"}}>
+                <h1 style={{margin: 0}}>Character Status Window</h1>
+                <button onClick={() => setView(view === "status" ? "roller" : "status")} style={{padding: "0.5rem 1rem", background: "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer"}}>
+                    {view === "status" ? "Go to Roller" : "Back to Status"}
+                </button>
+            </div>
             <p style={{margin: "0 0 1.25rem 0"}}>
                 Edit any field below for each active character in this chat.
             </p>
@@ -133,6 +308,7 @@ function CharacterStatusBoard({initialStatuses}: CharacterStatusBoardProps): Rea
                             <label>Journey <input value={status.journey} onChange={(event) => updateField(status.id, "journey", event.target.value)} style={{width: "100%"}} /></label>
                             <label>Goal <input value={status.goal} onChange={(event) => updateField(status.id, "goal", event.target.value)} style={{width: "100%"}} /></label>
                             <label>Threat <input value={status.threat} onChange={(event) => updateField(status.id, "threat", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Injuries and Trauma <textarea value={status.injuriesAndTrauma} onChange={(event) => updateField(status.id, "injuriesAndTrauma", event.target.value)} rows={2} style={{width: "100%"}} /></label>
                         </div>
 
                         <section style={{marginTop: "0.9rem"}}>
@@ -212,6 +388,7 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
      but exists as long as the instance does, i.e., the chat page is open.
      ***/
     myInternalState: {[key: string]: any};
+    private characterStatsCache: Map<string, InferredStats> = new Map();
 
     private toCharacterStatusList(): CharacterStatus[] {
         const allCharacters = this.myInternalState["characters"] as AnyRecord;
@@ -237,28 +414,34 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
             const status = ext?.status ?? {};
             const profile = character ?? {};
 
+            // Try to get inferred stats from cache or use the explicit values
+            const inferredStats = this.characterStatsCache.get(id) || inferStatsFromCharacter(character || {});
+
+            const attributes = inferAttributesFromCharacter(character || {});
+
             return {
                 id,
                 name: firstDefinedString([status.name, profile.name, profile.chatProfile], isUser ? "You" : ""),
-                archetype: firstDefinedString([status.archetype], ""),
+                archetype: firstDefinedString([status.archetype, attributes.archetype], ""),
                 favoriteSong: firstDefinedString([status.favoriteSong, status.favorite_song], ""),
-                description: firstDefinedString([status.description, profile.description], ""),
-                strength: firstDefinedString([String(status.strength ?? "")], ""),
-                agility: firstDefinedString([String(status.agility ?? "")], ""),
-                wits: firstDefinedString([String(status.wits ?? "")], ""),
-                empathy: firstDefinedString([String(status.empathy ?? "")], ""),
-                health: firstDefinedString([String(status.health ?? "")], ""),
-                hope: firstDefinedString([String(status.hope ?? "")], ""),
-                bliss: firstDefinedString([String(status.bliss ?? "")], ""),
+                description: firstDefinedString([status.description, attributes.description, profile.description], ""),
+                strength: firstDefinedString([String(status.strength ?? inferredStats.strength)], String(inferredStats.strength || "")),
+                agility: firstDefinedString([String(status.agility ?? inferredStats.agility)], String(inferredStats.agility || "")),
+                wits: firstDefinedString([String(status.wits ?? inferredStats.wits)], String(inferredStats.wits || "")),
+                empathy: firstDefinedString([String(status.empathy ?? inferredStats.empathy)], String(inferredStats.empathy || "")),
+                health: firstDefinedString([String(status.health ?? inferredStats.health)], String(inferredStats.health || "")),
+                hope: firstDefinedString([String(status.hope ?? inferredStats.hope)], String(inferredStats.hope || "")),
+                bliss: firstDefinedString([String(status.bliss ?? inferredStats.bliss)], String(inferredStats.bliss || "")),
                 permanent: firstDefinedString([status.permanent], ""),
-                talents: firstDefinedString([status.talents], ""),
-                dream: firstDefinedString([status.dream], ""),
-                flaw: firstDefinedString([status.flaw], ""),
-                gear: firstDefinedString([status.gear], ""),
+                talents: firstDefinedString([status.talents, attributes.talents], ""),
+                dream: firstDefinedString([status.dream, attributes.dream], ""),
+                flaw: firstDefinedString([status.flaw, attributes.flaw], ""),
+                gear: firstDefinedString([status.gear, attributes.gear], ""),
                 cash: firstDefinedString([String(status.cash ?? "")], ""),
                 journey: firstDefinedString([status.journey], ""),
                 goal: firstDefinedString([status.goal], ""),
-                threat: firstDefinedString([status.threat], ""),
+                threat: firstDefinedString([status.threat, attributes.threat], ""),
+                injuriesAndTrauma: firstDefinedString([status.injuriesAndTrauma], ""),
                 tension: []
             };
         });
@@ -306,6 +489,10 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
          This is called immediately after the constructor, in case there is some asynchronous code you need to
          run on instantiation.
          ***/
+        
+        // Load character stats from YAML definitions if available
+        await this.preloadCharacterStats();
+        
         return {
             /*** @type boolean @default null
              @description The 'success' boolean returned should be false IFF (if and only if), some condition is met that means
@@ -319,6 +506,31 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
             initState: null,
             chatState: null,
         };
+    }
+
+    /***
+     Preload character stats from YAML definitions
+     ***/
+    private async preloadCharacterStats(): Promise<void> {
+        const allCharacters = this.myInternalState["characters"] as AnyRecord;
+
+        for (const [id, character] of Object.entries(allCharacters ?? {})) {
+            if (character?.isRemoved) continue;
+
+            // Try to load stats from a YAML file if available
+            const characterName = character?.name?.toLowerCase().replace(/\s+/g, '_') || `character_${id}`;
+            const yamlPath = `/characters/${characterName}.yaml`;
+
+            try {
+                const yamlData = await loadCharacterYAML(yamlPath);
+                if (Object.keys(yamlData).length > 0) {
+                    const inferredStats = inferStatsFromCharacter(yamlData);
+                    this.characterStatsCache.set(id, inferredStats);
+                }
+            } catch (error) {
+                // Silently fail if YAML file not found, will use default inference
+            }
+        }
     }
 
     async setState(state: MessageStateType): Promise<void> {
