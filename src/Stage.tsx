@@ -114,7 +114,6 @@ function CharacterStatusBoard({initialStatuses}: CharacterStatusBoardProps): Rea
                     }}>
                         <h2 style={{margin: "0 0 0.8rem 0"}}>{status.name || `Character ${status.id}`}</h2>
                         <div style={{display: "grid", gap: "0.45rem"}}>
-                            <label>Name <input value={status.name} onChange={(event) => updateField(status.id, "name", event.target.value)} style={{width: "100%"}} /></label>
                             <label>Archetype <input value={status.archetype} onChange={(event) => updateField(status.id, "archetype", event.target.value)} style={{width: "100%"}} /></label>
                             <label>Favorite Song <input value={status.favoriteSong} onChange={(event) => updateField(status.id, "favoriteSong", event.target.value)} style={{width: "100%"}} /></label>
                             <label>Description <textarea value={status.description} onChange={(event) => updateField(status.id, "description", event.target.value)} rows={2} style={{width: "100%"}} /></label>
@@ -216,18 +215,31 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
 
     private toCharacterStatusList(): CharacterStatus[] {
         const allCharacters = this.myInternalState["characters"] as AnyRecord;
-        const entries = Object.entries(allCharacters ?? {})
-            .filter(([, character]) => !character?.isRemoved)
-            .map(([id, character]) => ({id, character}));
+        const allUsers = this.myInternalState["users"] as AnyRecord;
+        const entries: Array<{id: string; character?: any; isUser?: boolean}> = [];
 
-        const statusList: CharacterStatus[] = entries.map(({id, character}) => {
+        // Add all active characters
+        Object.entries(allCharacters ?? {})
+            .filter(([, character]) => !character?.isRemoved)
+            .forEach(([id, character]) => {
+                entries.push({id, character, isUser: false});
+            });
+
+        // Add user(s) as the first entry or primary participant
+        Object.entries(allUsers ?? {})
+            .filter(([, user]) => !user?.isRemoved)
+            .forEach(([id, user]) => {
+                entries.unshift({id: `user_${id}`, character: user, isUser: true});
+            });
+
+        const statusList: CharacterStatus[] = entries.map(({id, character, isUser}) => {
             const ext = character?.partial_extensions?.chub ?? {};
             const status = ext?.status ?? {};
             const profile = character ?? {};
 
             return {
                 id,
-                name: firstDefinedString([status.name, profile.name], ""),
+                name: firstDefinedString([status.name, profile.name, profile.chatProfile], isUser ? "You" : ""),
                 archetype: firstDefinedString([status.archetype], ""),
                 favoriteSong: firstDefinedString([status.favoriteSong, status.favorite_song], ""),
                 description: firstDefinedString([status.description, profile.description], ""),
@@ -286,6 +298,7 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
         this.myInternalState['numUsers'] = Object.keys(users).length;
         this.myInternalState['numChars'] = Object.keys(characters).length;
         this.myInternalState['characters'] = characters;
+        this.myInternalState['users'] = users;
     }
 
     async load(): Promise<Partial<LoadResponse<InitStateType, ChatStateType, MessageStateType>>> {
