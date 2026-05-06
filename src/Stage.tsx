@@ -48,11 +48,21 @@ function firstDefinedString(values: any[], fallback: string): string {
 
 type CharacterStatusBoardProps = {
     initialStatuses: CharacterStatus[];
+    onRoll?: (roll: AttributeRoll) => void;
+    onClearRoll?: (characterId: string, attribute: string) => void;
 };
 
 type DiceRoll = {
     dice: number[];
     modifiers: number;
+};
+
+type AttributeRoll = {
+    characterId: string;
+    attribute: string;
+    dice: number[];
+    successes: number;
+    timestamp: number;
 };
 
 function DiceRoller({statuses, onUpdateStatus}: {statuses: CharacterStatus[]; onUpdateStatus: (characterId: string, field: keyof Omit<CharacterStatus, "id" | "tension">, value: string) => void}): ReactElement {
@@ -213,9 +223,10 @@ function DiceRoller({statuses, onUpdateStatus}: {statuses: CharacterStatus[]; on
     </div>;
 }
 
-function CharacterStatusBoard({initialStatuses}: CharacterStatusBoardProps): ReactElement {
+function CharacterStatusBoard({initialStatuses, onRoll, onClearRoll}: CharacterStatusBoardProps): ReactElement {
     const [statuses, setStatuses] = useState<CharacterStatus[]>(initialStatuses);
     const [view, setView] = useState<"status" | "roller">("status");
+    const [attributeRolls, setAttributeRolls] = useState<Map<string, AttributeRoll>>(new Map());
 
     useEffect(() => {
         setStatuses(initialStatuses);
@@ -245,6 +256,56 @@ function CharacterStatusBoard({initialStatuses}: CharacterStatusBoardProps): Rea
                 })
             };
         }));
+    }
+
+    function rollAttribute(characterId: string, attribute: string): void {
+        const status = statuses.find((s) => s.id === characterId);
+        if (!status) return;
+
+        const rawValue = Number((status as any)[attribute]);
+        const diceCount = Number.isFinite(rawValue) ? Math.max(0, Math.floor(rawValue)) : 0;
+
+        // Roll the dice
+        const dice: number[] = [];
+        for (let i = 0; i < diceCount; i++) {
+            dice.push(Math.floor(Math.random() * 6) + 1);
+        }
+
+        // Count successes (6s)
+        const successes = dice.filter((d) => d === 6).length;
+
+        // Create roll result
+        const roll: AttributeRoll = {
+            characterId,
+            attribute,
+            dice,
+            successes,
+            timestamp: Date.now(),
+        };
+
+        // Store the roll
+        const key = `${characterId}_${attribute}`;
+        setAttributeRolls((current) => new Map(current).set(key, roll));
+        
+        // Notify parent Stage of the roll
+        onRoll?.(roll);
+    }
+
+    function getRollResult(characterId: string, attribute: string): AttributeRoll | undefined {
+        const key = `${characterId}_${attribute}`;
+        return attributeRolls.get(key);
+    }
+
+    function clearRoll(characterId: string, attribute: string): void {
+        const key = `${characterId}_${attribute}`;
+        setAttributeRolls((current) => {
+            const next = new Map(current);
+            next.delete(key);
+            return next;
+        });
+        
+        // Notify parent Stage of the clear
+        onClearRoll?.(characterId, attribute);
     }
 
     if (view === "roller") {
@@ -292,10 +353,29 @@ function CharacterStatusBoard({initialStatuses}: CharacterStatusBoardProps): Rea
                             <label>Archetype <input value={status.archetype} onChange={(event) => updateField(status.id, "archetype", event.target.value)} style={{width: "100%"}} /></label>
                             <label>Favorite Song <input value={status.favoriteSong} onChange={(event) => updateField(status.id, "favoriteSong", event.target.value)} style={{width: "100%"}} /></label>
                             <label>Description <textarea value={status.description} onChange={(event) => updateField(status.id, "description", event.target.value)} rows={2} style={{width: "100%"}} /></label>
-                            <label>Strength (Numerical) <input type="number" value={status.strength} onChange={(event) => updateField(status.id, "strength", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Agility (Numerical) <input type="number" value={status.agility} onChange={(event) => updateField(status.id, "agility", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Wits (Numerical) <input type="number" value={status.wits} onChange={(event) => updateField(status.id, "wits", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Empathy (Numerical) <input type="number" value={status.empathy} onChange={(event) => updateField(status.id, "empathy", event.target.value)} style={{width: "100%"}} /></label>
+                            
+                            {["strength", "agility", "wits", "empathy"].map((attr) => {
+                                const roll = getRollResult(status.id, attr);
+                                return <div key={attr} style={{border: "1px solid #ddd", borderRadius: "4px", padding: "0.5rem", background: "#fafafa"}}>
+                                    <div style={{display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.25rem"}}>
+                                        <label style={{flex: 1}}>
+                                            {attr.charAt(0).toUpperCase() + attr.slice(1)} (Numerical)
+                                            <input type="number" value={(status as any)[attr]} onChange={(event) => updateField(status.id, attr as any, event.target.value)} style={{width: "100%"}} />
+                                        </label>
+                                        <button onClick={() => rollAttribute(status.id, attr)} style={{padding: "0.25rem 0.5rem", background: "#FF9800", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "0.9rem"}}>Roll</button>
+                                    </div>
+                                    {roll && (
+                                        <div style={{fontSize: "0.85rem", background: "white", padding: "0.25rem 0.5rem", borderRadius: "3px", display: "flex", justifyContent: "space-between", alignItems: "center"}}>
+                                            <span>
+                                                Dice: {roll.dice.join(", ")} | Successes: <strong>{roll.successes}</strong>
+                                                {roll.successes === 0 && <span style={{marginLeft: "0.5rem", color: "#d9534f"}}>FAILURE</span>}
+                                            </span>
+                                            <button onClick={() => clearRoll(status.id, attr)} style={{padding: "0.2rem 0.4rem", background: "#999", color: "white", border: "none", borderRadius: "3px", cursor: "pointer", fontSize: "0.75rem"}}>Clear</button>
+                                        </div>
+                                    )}
+                                </div>;
+                            })}
+
                             <label>Health <input type="number" value={status.health} onChange={(event) => updateField(status.id, "health", event.target.value)} style={{width: "100%"}} /></label>
                             <label>Hope <input type="number" value={status.hope} onChange={(event) => updateField(status.id, "hope", event.target.value)} style={{width: "100%"}} /></label>
                             <label>Bliss <input type="number" value={status.bliss} onChange={(event) => updateField(status.id, "bliss", event.target.value)} style={{width: "100%"}} /></label>
@@ -389,6 +469,7 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
      ***/
     myInternalState: {[key: string]: any};
     private characterStatsCache: Map<string, InferredStats> = new Map();
+    private attributeRolls: Map<string, AttributeRoll> = new Map();
 
     private toCharacterStatusList(): CharacterStatus[] {
         const allCharacters = this.myInternalState["characters"] as AnyRecord;
@@ -544,6 +625,29 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
         }
     }
 
+    /***
+     Register an attribute roll result
+     ***/
+    public registerAttributeRoll(roll: AttributeRoll): void {
+        const key = `${roll.characterId}_${roll.attribute}`;
+        this.attributeRolls.set(key, roll);
+    }
+
+    /***
+     Clear an attribute roll result
+     ***/
+    public clearAttributeRoll(characterId: string, attribute: string): void {
+        const key = `${characterId}_${attribute}`;
+        this.attributeRolls.delete(key);
+    }
+
+    /***
+     Get all attribute rolls
+     ***/
+    public getAttributeRolls(): Map<string, AttributeRoll> {
+        return this.attributeRolls;
+    }
+
     async beforePrompt(userMessage: Message): Promise<Partial<StageResponse<ChatStateType, MessageStateType>>> {
         /***
          This is called after someone presses 'send', but before anything is sent to the LLM.
@@ -557,11 +661,28 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
             isBot             /*** @type: boolean
              @description Whether this is itself from another bot, ex. in a group chat. ***/
         } = userMessage;
+        
+        // Generate stage directions based on current attribute rolls
+        let stageDirections: string | null = null;
+        if (this.attributeRolls && this.attributeRolls.size > 0) {
+            const rolls = Array.from(this.attributeRolls.values());
+            const rollDescriptions = rolls.map((roll) => {
+                const characterName = (this.myInternalState["characters"]?.[roll.characterId] as any)?.name || `Character ${roll.characterId}`;
+                if (roll.successes > 0) {
+                    return `${characterName} rolled their ${roll.attribute}: ${roll.successes} success${roll.successes > 1 ? "es" : ""} (dice: ${roll.dice.join(", ")})`;
+                } else {
+                    return `${characterName} rolled their ${roll.attribute}: FAILED (no 6s rolled) (dice: ${roll.dice.join(", ")})`;
+                }
+            }).join("\n");
+    
+            stageDirections = `Recent dice rolls have occurred:\n${rollDescriptions}\n\nBased on these results, describe what happens. For successes, describe a positive outcome. For failures, describe a complication or failure.`;
+        }
+
         return {
             /*** @type null | string @description A string to add to the
              end of the final prompt sent to the LLM,
              but that isn't persisted. ***/
-            stageDirections: null,
+            stageDirections: stageDirections,
             /*** @type MessageStateType | null @description the new state after the userMessage. ***/
             messageState: {'someKey': this.myInternalState['someKey']},
             /*** @type null | string @description If not null, the user's message itself is replaced
@@ -593,11 +714,28 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
             isBot             /*** @type: boolean
              @description Whether this is from a bot, conceivably always true. ***/
         } = botMessage;
+        
+        // Generate stage directions showing roll results used in this response
+        let stageDirections: string | null = null;
+        if (this.attributeRolls && this.attributeRolls.size > 0) {
+            const rolls = Array.from(this.attributeRolls.values());
+            const rollDescriptions = rolls.map((roll) => {
+                const characterName = (this.myInternalState["characters"]?.[roll.characterId] as any)?.name || `Character ${roll.characterId}`;
+                if (roll.successes > 0) {
+                    return `✓ ${characterName}'s ${roll.attribute} roll: ${roll.successes} success${roll.successes > 1 ? "es" : ""} (${roll.dice.join(", ")})`;
+                } else {
+                    return `✗ ${characterName}'s ${roll.attribute} roll: FAILED (${roll.dice.join(", ")})`;
+                }
+            }).join("\n");
+            
+            stageDirections = `Dice Rolls Used:\n${rollDescriptions}`;
+        }
+
         return {
             /*** @type null | string @description A string to add to the
              end of the final prompt sent to the LLM,
              but that isn't persisted. ***/
-            stageDirections: null,
+            stageDirections: stageDirections,
             /*** @type MessageStateType | null @description the new state after the botMessage. ***/
             messageState: {'someKey': this.myInternalState['someKey']},
             /*** @type null | string @description If not null, the bot's response itself is replaced
@@ -627,7 +765,11 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
            @link https://cuberun.adamkarlsten.com/ (Demo)
          ***/
         const statuses = this.toCharacterStatusList();
-        return <CharacterStatusBoard initialStatuses={statuses} />;
+        return <CharacterStatusBoard 
+            initialStatuses={statuses}
+            onRoll={(roll) => this.registerAttributeRoll(roll)}
+            onClearRoll={(characterId, attribute) => this.clearAttributeRoll(characterId, attribute)}
+        />;
     }
 
 }
