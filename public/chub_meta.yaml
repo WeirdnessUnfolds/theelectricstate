@@ -33,9 +33,117 @@
 config_schema:
   type: object
   properties:
-    health:
-      type: integer
-      default: 100
+    sheetStatuses:
+      type: array
+      default: []
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+          name:
+            type: string
+            default: ''
+          archetype:
+            type: string
+            default: ''
+          favoriteSong:
+            type: string
+            default: ''
+          description:
+            type: string
+            default: ''
+          strength:
+            type: string
+            default: ''
+          agility:
+            type: string
+            default: ''
+          wits:
+            type: string
+            default: ''
+          empathy:
+            type: string
+            default: ''
+          health:
+            type: string
+            default: ''
+          hope:
+            type: string
+            default: ''
+          bliss:
+            type: string
+            default: ''
+          permanent:
+            type: string
+            default: ''
+          talents:
+            type: string
+            default: ''
+          dream:
+            type: string
+            default: ''
+          flaw:
+            type: string
+            default: ''
+          gear:
+            type: string
+            default: ''
+          cash:
+            type: string
+            default: ''
+          journey:
+            type: string
+            default: ''
+          goal:
+            type: string
+            default: ''
+          threat:
+            type: string
+            default: ''
+          injuriesAndTrauma:
+            type: string
+            default: ''
+          tension:
+            type: array
+            default: []
+            items:
+              type: object
+              properties:
+                with:
+                  type: string
+                value:
+                  type: string
+                  default: ''
+              required:
+                - with
+                - value
+        required:
+          - id
+    attributeRolls:
+      type: array
+      default: []
+      items:
+        type: object
+        properties:
+          characterId:
+            type: string
+          attribute:
+            type: string
+          dice:
+            type: array
+            items:
+              type: integer
+          successes:
+            type: integer
+          timestamp:
+            type: integer
+        required:
+          - characterId
+          - attribute
+          - dice
+          - successes
+          - timestamp
 
 # The schema of the state that you store.
 # This isn't needed even if you do store state,
@@ -50,9 +158,83 @@ state_schema:
   message:
     type: object
     properties:
-      angry:
-        type: boolean
-        default: true
+      someKey:
+        type: string
+      sheetStatuses:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            archetype:
+              type: string
+            favoriteSong:
+              type: string
+            description:
+              type: string
+            strength:
+              type: string
+            agility:
+              type: string
+            wits:
+              type: string
+            empathy:
+              type: string
+            health:
+              type: string
+            hope:
+              type: string
+            bliss:
+              type: string
+            permanent:
+              type: string
+            talents:
+              type: string
+            dream:
+              type: string
+            flaw:
+              type: string
+            gear:
+              type: string
+            cash:
+              type: string
+            journey:
+              type: string
+            goal:
+              type: string
+            threat:
+              type: string
+            injuriesAndTrauma:
+              type: string
+            tension:
+              type: array
+              items:
+                type: object
+                properties:
+                  with:
+                    type: string
+                  value:
+                    type: string
+      attributeRolls:
+        type: array
+        items:
+          type: object
+          properties:
+            characterId:
+              type: string
+            attribute:
+              type: string
+            dice:
+              type: array
+              items:
+                type: integer
+            successes:
+              type: integer
+            timestamp:
+              type: integer
   chat:
     type: object
     properties:

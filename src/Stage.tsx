@@ -50,6 +50,7 @@ type CharacterStatusBoardProps = {
     initialStatuses: CharacterStatus[];
     onRoll?: (roll: AttributeRoll) => void;
     onClearRoll?: (characterId: string, attribute: string) => void;
+    onStatusesChange?: (statuses: CharacterStatus[]) => void;
 };
 
 type DiceRoll = {
@@ -63,6 +64,12 @@ type AttributeRoll = {
     dice: number[];
     successes: number;
     timestamp: number;
+};
+
+type MessageStateType = {
+    someKey?: string;
+    sheetStatuses?: CharacterStatus[];
+    attributeRolls?: AttributeRoll[];
 };
 
 function DiceRoller({statuses, onUpdateStatus}: {statuses: CharacterStatus[]; onUpdateStatus: (characterId: string, field: keyof Omit<CharacterStatus, "id" | "tension">, value: string) => void}): ReactElement {
@@ -223,7 +230,7 @@ function DiceRoller({statuses, onUpdateStatus}: {statuses: CharacterStatus[]; on
     </div>;
 }
 
-function CharacterStatusBoard({initialStatuses, onRoll, onClearRoll}: CharacterStatusBoardProps): ReactElement {
+function CharacterStatusBoard({initialStatuses, onRoll, onClearRoll, onStatusesChange}: CharacterStatusBoardProps): ReactElement {
     const [statuses, setStatuses] = useState<CharacterStatus[]>(initialStatuses);
     const [view, setView] = useState<"status" | "roller">("status");
     const [attributeRolls, setAttributeRolls] = useState<Map<string, AttributeRoll>>(new Map());
@@ -231,6 +238,10 @@ function CharacterStatusBoard({initialStatuses, onRoll, onClearRoll}: CharacterS
     useEffect(() => {
         setStatuses(initialStatuses);
     }, [initialStatuses]);
+
+    useEffect(() => {
+        onStatusesChange?.(statuses);
+    }, [statuses, onStatusesChange]);
 
     function updateField(characterId: string, field: keyof Omit<CharacterStatus, "id" | "tension">, value: string): void {
         setStatuses((current) => current.map((status) => {
@@ -419,17 +430,6 @@ function CharacterStatusBoard({initialStatuses, onRoll, onClearRoll}: CharacterS
 }
 
 /***
- The type that this stage persists message-level state in.
- This is primarily for readability, and not enforced.
-
- @description This type is saved in the database after each message,
-  which makes it ideal for storing things like positions and statuses,
-  but not for things like history, which is best managed ephemerally
-  in the internal state of the Stage class itself.
- ***/
-type MessageStateType = any;
-
-/***
  The type of the stage-specific configuration of this stage.
 
  @description This is for things you want people to be able to configure,
@@ -472,6 +472,11 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
     private attributeRolls: Map<string, AttributeRoll> = new Map();
 
     private toCharacterStatusList(): CharacterStatus[] {
+        const savedStatuses = Array.isArray(this.myInternalState["sheetStatuses"])
+            ? (this.myInternalState["sheetStatuses"] as CharacterStatus[])
+            : [];
+        const savedById = new Map(savedStatuses.map((status) => [status.id, status]));
+
         const allCharacters = this.myInternalState["characters"] as AnyRecord;
         const allUsers = this.myInternalState["users"] as AnyRecord;
         const entries: Array<{id: string; character?: any; isUser?: boolean}> = [];
@@ -494,6 +499,7 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
             const ext = character?.partial_extensions?.chub ?? {};
             const status = ext?.status ?? {};
             const profile = character ?? {};
+            const saved = savedById.get(id);
 
             // Try to get inferred stats from cache or use the explicit values
             const inferredStats = this.characterStatsCache.get(id) || inferStatsFromCharacter(character || {});
@@ -502,38 +508,40 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
 
             return {
                 id,
-                name: firstDefinedString([status.name, profile.name, profile.chatProfile], isUser ? "You" : ""),
-                archetype: firstDefinedString([status.archetype, attributes.archetype], ""),
-                favoriteSong: firstDefinedString([status.favoriteSong, status.favorite_song], ""),
-                description: firstDefinedString([status.description, attributes.description, profile.description], ""),
-                strength: firstDefinedString([String(status.strength ?? inferredStats.strength)], String(inferredStats.strength || "")),
-                agility: firstDefinedString([String(status.agility ?? inferredStats.agility)], String(inferredStats.agility || "")),
-                wits: firstDefinedString([String(status.wits ?? inferredStats.wits)], String(inferredStats.wits || "")),
-                empathy: firstDefinedString([String(status.empathy ?? inferredStats.empathy)], String(inferredStats.empathy || "")),
-                health: firstDefinedString([String(status.health ?? inferredStats.health)], String(inferredStats.health || "")),
-                hope: firstDefinedString([String(status.hope ?? inferredStats.hope)], String(inferredStats.hope || "")),
-                bliss: firstDefinedString([String(status.bliss ?? inferredStats.bliss)], String(inferredStats.bliss || "")),
-                permanent: firstDefinedString([status.permanent], ""),
-                talents: firstDefinedString([status.talents, attributes.talents], ""),
-                dream: firstDefinedString([status.dream, attributes.dream], ""),
-                flaw: firstDefinedString([status.flaw, attributes.flaw], ""),
-                gear: firstDefinedString([status.gear, attributes.gear], ""),
-                cash: firstDefinedString([String(status.cash ?? "")], ""),
-                journey: firstDefinedString([status.journey], ""),
-                goal: firstDefinedString([status.goal], ""),
-                threat: firstDefinedString([status.threat, attributes.threat], ""),
-                injuriesAndTrauma: firstDefinedString([status.injuriesAndTrauma], ""),
+                name: firstDefinedString([saved?.name, status.name, profile.name, profile.chatProfile], isUser ? "You" : ""),
+                archetype: firstDefinedString([saved?.archetype, status.archetype, attributes.archetype], ""),
+                favoriteSong: firstDefinedString([saved?.favoriteSong, status.favoriteSong, status.favorite_song], ""),
+                description: firstDefinedString([saved?.description, status.description, attributes.description, profile.description], ""),
+                strength: firstDefinedString([saved?.strength, String(status.strength ?? inferredStats.strength)], String(inferredStats.strength || "")),
+                agility: firstDefinedString([saved?.agility, String(status.agility ?? inferredStats.agility)], String(inferredStats.agility || "")),
+                wits: firstDefinedString([saved?.wits, String(status.wits ?? inferredStats.wits)], String(inferredStats.wits || "")),
+                empathy: firstDefinedString([saved?.empathy, String(status.empathy ?? inferredStats.empathy)], String(inferredStats.empathy || "")),
+                health: firstDefinedString([saved?.health, String(status.health ?? inferredStats.health)], String(inferredStats.health || "")),
+                hope: firstDefinedString([saved?.hope, String(status.hope ?? inferredStats.hope)], String(inferredStats.hope || "")),
+                bliss: firstDefinedString([saved?.bliss, String(status.bliss ?? inferredStats.bliss)], String(inferredStats.bliss || "")),
+                permanent: firstDefinedString([saved?.permanent, status.permanent], ""),
+                talents: firstDefinedString([saved?.talents, status.talents, attributes.talents], ""),
+                dream: firstDefinedString([saved?.dream, status.dream, attributes.dream], ""),
+                flaw: firstDefinedString([saved?.flaw, status.flaw, attributes.flaw], ""),
+                gear: firstDefinedString([saved?.gear, status.gear, attributes.gear], ""),
+                cash: firstDefinedString([saved?.cash, String(status.cash ?? "")], ""),
+                journey: firstDefinedString([saved?.journey, status.journey], ""),
+                goal: firstDefinedString([saved?.goal, status.goal], ""),
+                threat: firstDefinedString([saved?.threat, status.threat, attributes.threat], ""),
+                injuriesAndTrauma: firstDefinedString([saved?.injuriesAndTrauma, status.injuriesAndTrauma], ""),
                 tension: []
             };
         });
 
         return statusList.map((status) => {
+            const saved = savedById.get(status.id);
             const tensions = statusList
                 .filter((candidate) => candidate.id !== status.id)
                 .map((candidate) => {
+                    const savedTension = (saved?.tension ?? []).find((entry) => entry.with === candidate.name);
                     return {
                         with: candidate.name,
-                        value: ""
+                        value: savedTension?.value ?? ""
                     };
                 });
             return {...status, tension: tensions};
@@ -563,6 +571,16 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
         this.myInternalState['numChars'] = Object.keys(characters).length;
         this.myInternalState['characters'] = characters;
         this.myInternalState['users'] = users;
+        this.myInternalState['sheetStatuses'] = Array.isArray(this.myInternalState['sheetStatuses'])
+            ? this.myInternalState['sheetStatuses']
+            : [];
+
+        const persistedRolls = this.myInternalState['attributeRolls'];
+        if (Array.isArray(persistedRolls)) {
+            this.attributeRolls = new Map(
+                persistedRolls.map((roll: AttributeRoll) => [`${roll.characterId}_${roll.attribute}`, roll])
+            );
+        }
     }
 
     async load(): Promise<Partial<LoadResponse<InitStateType, ChatStateType, MessageStateType>>> {
@@ -622,6 +640,12 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
          ***/
         if (state != null) {
             this.myInternalState = {...this.myInternalState, ...state};
+
+            if (Array.isArray(state.attributeRolls)) {
+                this.attributeRolls = new Map(
+                    state.attributeRolls.map((roll) => [`${roll.characterId}_${roll.attribute}`, roll])
+                );
+            }
         }
     }
 
@@ -684,7 +708,11 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
              but that isn't persisted. ***/
             stageDirections: stageDirections,
             /*** @type MessageStateType | null @description the new state after the userMessage. ***/
-            messageState: {'someKey': this.myInternalState['someKey']},
+            messageState: {
+                someKey: this.myInternalState['someKey'],
+                sheetStatuses: this.myInternalState['sheetStatuses'] ?? [],
+                attributeRolls: Array.from(this.attributeRolls.values())
+            },
             /*** @type null | string @description If not null, the user's message itself is replaced
              with this value, both in what's sent to the LLM and in the database. ***/
             modifiedMessage: null,
@@ -737,7 +765,11 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
              but that isn't persisted. ***/
             stageDirections: stageDirections,
             /*** @type MessageStateType | null @description the new state after the botMessage. ***/
-            messageState: {'someKey': this.myInternalState['someKey']},
+            messageState: {
+                someKey: this.myInternalState['someKey'],
+                sheetStatuses: this.myInternalState['sheetStatuses'] ?? [],
+                attributeRolls: Array.from(this.attributeRolls.values())
+            },
             /*** @type null | string @description If not null, the bot's response itself is replaced
              with this value, both in what's sent to the LLM subsequently and in the database. ***/
             modifiedMessage: null,
@@ -769,6 +801,9 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
             initialStatuses={statuses}
             onRoll={(roll) => this.registerAttributeRoll(roll)}
             onClearRoll={(characterId, attribute) => this.clearAttributeRoll(characterId, attribute)}
+            onStatusesChange={(updated) => {
+                this.myInternalState['sheetStatuses'] = updated;
+            }}
         />;
     }
 
