@@ -1,6 +1,167 @@
-import {ReactElement} from "react";
+import {ReactElement, useEffect, useState} from "react";
 import {StageBase, StageResponse, InitialData, Message} from "@chub-ai/stages-ts";
 import {LoadResponse} from "@chub-ai/stages-ts/dist/types/load";
+
+type AnyRecord = {[key: string]: any};
+
+type TensionEntry = {
+    with: string;
+    value: string;
+};
+
+type CharacterStatus = {
+    id: string;
+    name: string;
+    archetype: string;
+    favoriteSong: string;
+    description: string;
+    strength: string;
+    agility: string;
+    wits: string;
+    empathy: string;
+    health: string;
+    hope: string;
+    bliss: string;
+    permanent: string;
+    talents: string;
+    dream: string;
+    flaw: string;
+    gear: string;
+    cash: string;
+    journey: string;
+    goal: string;
+    threat: string;
+    tension: TensionEntry[];
+};
+
+function firstDefinedString(values: any[], fallback: string): string {
+    for (const value of values) {
+        if (typeof value === "string" && value.trim().length > 0) {
+            return value.trim();
+        }
+    }
+    return fallback;
+}
+
+
+type CharacterStatusBoardProps = {
+    initialStatuses: CharacterStatus[];
+};
+
+function CharacterStatusBoard({initialStatuses}: CharacterStatusBoardProps): ReactElement {
+    const [statuses, setStatuses] = useState<CharacterStatus[]>(initialStatuses);
+
+    useEffect(() => {
+        setStatuses(initialStatuses);
+    }, [initialStatuses]);
+
+    function updateField(characterId: string, field: keyof Omit<CharacterStatus, "id" | "tension">, value: string): void {
+        setStatuses((current) => current.map((status) => {
+            if (status.id !== characterId) {
+                return status;
+            }
+            return {...status, [field]: value};
+        }));
+    }
+
+    function updateTension(characterId: string, withName: string, value: string): void {
+        setStatuses((current) => current.map((status) => {
+            if (status.id !== characterId) {
+                return status;
+            }
+            return {
+                ...status,
+                tension: status.tension.map((entry) => {
+                    if (entry.with !== withName) {
+                        return entry;
+                    }
+                    return {...entry, value};
+                })
+            };
+        }));
+    }
+
+    return <div style={{
+        width: "100vw",
+        height: "100vh",
+        boxSizing: "border-box",
+        overflowY: "auto",
+        background: "linear-gradient(160deg, #f7f0df 0%, #d5e6f8 55%, #f4f7e8 100%)",
+        padding: "1.5rem",
+        color: "#1f2a3d",
+        fontFamily: "\"Trebuchet MS\", \"Segoe UI\", sans-serif"
+    }}>
+        <div style={{
+            maxWidth: "1200px",
+            margin: "0 auto"
+        }}>
+            <h1 style={{margin: "0 0 0.5rem 0"}}>Character Status Window</h1>
+            <p style={{margin: "0 0 1.25rem 0"}}>
+                Edit any field below for each active character in this chat.
+            </p>
+            <div style={{
+                display: "grid",
+                gap: "1rem",
+                gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))"
+            }}>
+                {statuses.map((status) => (
+                    <article key={status.id} style={{
+                        border: "1px solid #98aec7",
+                        borderRadius: "14px",
+                        padding: "1rem",
+                        background: "rgba(255, 255, 255, 0.84)",
+                        boxShadow: "0 10px 26px rgba(37, 67, 102, 0.14)"
+                    }}>
+                        <h2 style={{margin: "0 0 0.8rem 0"}}>{status.name || `Character ${status.id}`}</h2>
+                        <div style={{display: "grid", gap: "0.45rem"}}>
+                            <label>Name <input value={status.name} onChange={(event) => updateField(status.id, "name", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Archetype <input value={status.archetype} onChange={(event) => updateField(status.id, "archetype", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Favorite Song <input value={status.favoriteSong} onChange={(event) => updateField(status.id, "favoriteSong", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Description <textarea value={status.description} onChange={(event) => updateField(status.id, "description", event.target.value)} rows={2} style={{width: "100%"}} /></label>
+                            <label>Strength (Numerical) <input type="number" value={status.strength} onChange={(event) => updateField(status.id, "strength", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Agility (Numerical) <input type="number" value={status.agility} onChange={(event) => updateField(status.id, "agility", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Wits (Numerical) <input type="number" value={status.wits} onChange={(event) => updateField(status.id, "wits", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Empathy (Numerical) <input type="number" value={status.empathy} onChange={(event) => updateField(status.id, "empathy", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Health <input type="number" value={status.health} onChange={(event) => updateField(status.id, "health", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Hope <input type="number" value={status.hope} onChange={(event) => updateField(status.id, "hope", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Bliss <input type="number" value={status.bliss} onChange={(event) => updateField(status.id, "bliss", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Permanent <input value={status.permanent} onChange={(event) => updateField(status.id, "permanent", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Talents <input value={status.talents} onChange={(event) => updateField(status.id, "talents", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Dream <input value={status.dream} onChange={(event) => updateField(status.id, "dream", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Flaw <input value={status.flaw} onChange={(event) => updateField(status.id, "flaw", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Gear <input value={status.gear} onChange={(event) => updateField(status.id, "gear", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Cash <input type="number" value={status.cash} onChange={(event) => updateField(status.id, "cash", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Journey <input value={status.journey} onChange={(event) => updateField(status.id, "journey", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Goal <input value={status.goal} onChange={(event) => updateField(status.id, "goal", event.target.value)} style={{width: "100%"}} /></label>
+                            <label>Threat <input value={status.threat} onChange={(event) => updateField(status.id, "threat", event.target.value)} style={{width: "100%"}} /></label>
+                        </div>
+
+                        <section style={{marginTop: "0.9rem"}}>
+                            <h3 style={{margin: "0 0 0.4rem 0", fontSize: "1rem"}}>Tension</h3>
+                            {status.tension.length === 0 ? (
+                                <div>No other active characters in this chat.</div>
+                            ) : (
+                                <div style={{display: "grid", gap: "0.45rem"}}>
+                                    {status.tension.map((entry) => (
+                                        <label key={`${status.id}-${entry.with}`}>
+                                            {entry.with}
+                                            <input
+                                                type="number"
+                                                value={entry.value}
+                                                onChange={(event) => updateTension(status.id, entry.with, event.target.value)}
+                                                style={{width: "100%"}}
+                                            />
+                                        </label>
+                                    ))}
+                                </div>
+                            )}
+                        </section>
+                    </article>
+                ))}
+            </div>
+        </div>
+    </div>;
+}
 
 /***
  The type that this stage persists message-level state in.
@@ -53,6 +214,56 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
      ***/
     myInternalState: {[key: string]: any};
 
+    private toCharacterStatusList(): CharacterStatus[] {
+        const allCharacters = this.myInternalState["characters"] as AnyRecord;
+        const entries = Object.entries(allCharacters ?? {})
+            .filter(([, character]) => !character?.isRemoved)
+            .map(([id, character]) => ({id, character}));
+
+        const statusList: CharacterStatus[] = entries.map(({id, character}) => {
+            const ext = character?.partial_extensions?.chub ?? {};
+            const status = ext?.status ?? {};
+            const profile = character ?? {};
+
+            return {
+                id,
+                name: firstDefinedString([status.name, profile.name], ""),
+                archetype: firstDefinedString([status.archetype], ""),
+                favoriteSong: firstDefinedString([status.favoriteSong, status.favorite_song], ""),
+                description: firstDefinedString([status.description, profile.description], ""),
+                strength: firstDefinedString([String(status.strength ?? "")], ""),
+                agility: firstDefinedString([String(status.agility ?? "")], ""),
+                wits: firstDefinedString([String(status.wits ?? "")], ""),
+                empathy: firstDefinedString([String(status.empathy ?? "")], ""),
+                health: firstDefinedString([String(status.health ?? "")], ""),
+                hope: firstDefinedString([String(status.hope ?? "")], ""),
+                bliss: firstDefinedString([String(status.bliss ?? "")], ""),
+                permanent: firstDefinedString([status.permanent], ""),
+                talents: firstDefinedString([status.talents], ""),
+                dream: firstDefinedString([status.dream], ""),
+                flaw: firstDefinedString([status.flaw], ""),
+                gear: firstDefinedString([status.gear], ""),
+                cash: firstDefinedString([String(status.cash ?? "")], ""),
+                journey: firstDefinedString([status.journey], ""),
+                goal: firstDefinedString([status.goal], ""),
+                threat: firstDefinedString([status.threat], ""),
+                tension: []
+            };
+        });
+
+        return statusList.map((status) => {
+            const tensions = statusList
+                .filter((candidate) => candidate.id !== status.id)
+                .map((candidate) => {
+                    return {
+                        with: candidate.name,
+                        value: ""
+                    };
+                });
+            return {...status, tension: tensions};
+        });
+    }
+
     constructor(data: InitialData<InitStateType, ChatStateType, MessageStateType, ConfigType>) {
         /***
          This is the first thing called in the stage,
@@ -74,6 +285,7 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
         this.myInternalState = messageState != null ? messageState : {'someKey': 'someValue'};
         this.myInternalState['numUsers'] = Object.keys(users).length;
         this.myInternalState['numChars'] = Object.keys(characters).length;
+        this.myInternalState['characters'] = characters;
     }
 
     async load(): Promise<Partial<LoadResponse<InitStateType, ChatStateType, MessageStateType>>> {
@@ -189,17 +401,8 @@ export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateT
            @link https://github.com/akarlsten/cuberun (Source)
            @link https://cuberun.adamkarlsten.com/ (Demo)
          ***/
-        return <div style={{
-            width: '100vw',
-            height: '100vh',
-            display: 'grid',
-            alignItems: 'stretch'
-        }}>
-            <div>Hello World! I'm an empty stage! With {this.myInternalState['someKey']}!</div>
-            <div>There is/are/were {this.myInternalState['numChars']} character(s)
-                and {this.myInternalState['numUsers']} human(s) here.
-            </div>
-        </div>;
+        const statuses = this.toCharacterStatusList();
+        return <CharacterStatusBoard initialStatuses={statuses} />;
     }
 
 }
