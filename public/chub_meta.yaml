@@ -118,3 +118,6 @@ state_schema:
     properties:
       lastResolution:
         type: object
+
+github_path: 'https://github.com/WeirdnessUnfolds/theelectricstate'
+
