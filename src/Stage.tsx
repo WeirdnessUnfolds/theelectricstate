@@ -1,810 +1,396 @@
-import {ReactElement, useEffect, useState} from "react";
+import {ReactElement} from "react";
 import {StageBase, StageResponse, InitialData, Message} from "@chub-ai/stages-ts";
 import {LoadResponse} from "@chub-ai/stages-ts/dist/types/load";
-import {inferStatsFromCharacter, inferAttributesFromCharacter, loadCharacterYAML, InferredStats} from "./characterStats";
 
-type AnyRecord = {[key: string]: any};
+type AbilityKey =
+    | "airmanship"
+    | "combat"
+    | "weapons"
+    | "awareness"
+    | "systems"
+    | "analysis"
+    | "intelligence"
+    | "reflexes"
+    | "composure"
+    | "physique";
 
-type TensionEntry = {
-    with: string;
-    value: string;
-};
+type OutcomeKey = "YES_AND" | "YES" | "YES_BUT" | "NO" | "NO_AND";
 
-type CharacterStatus = {
-    id: string;
-    name: string;
-    archetype: string;
-    favoriteSong: string;
-    description: string;
-    strength: string;
-    agility: string;
-    wits: string;
-    empathy: string;
-    health: string;
-    hope: string;
-    bliss: string;
-    permanent: string;
-    talents: string;
-    dream: string;
-    flaw: string;
-    gear: string;
-    cash: string;
-    journey: string;
-    goal: string;
-    threat: string;
-    injuriesAndTrauma: string;
-    tension: TensionEntry[];
-};
-
-function firstDefinedString(values: any[], fallback: string): string {
-    for (const value of values) {
-        if (typeof value === "string" && value.trim().length > 0) {
-            return value.trim();
-        }
-    }
-    return fallback;
-}
-
-
-type CharacterStatusBoardProps = {
-    initialStatuses: CharacterStatus[];
-    onRoll?: (roll: AttributeRoll) => void;
-    onClearRoll?: (characterId: string, attribute: string) => void;
-    onStatusesChange?: (statuses: CharacterStatus[]) => void;
-};
-
-type DiceRoll = {
-    dice: number[];
-    modifiers: number;
-};
-
-type AttributeRoll = {
-    characterId: string;
-    attribute: string;
-    dice: number[];
-    successes: number;
-    timestamp: number;
+type Resolution = {
+    ability: AbilityKey;
+    support: AbilityKey | null;
+    difficulty: 0 | 1 | 2 | 3;
+    roll: number;
+    target: number;
+    outcome: OutcomeKey;
 };
 
 type MessageStateType = {
-    someKey?: string;
-    sheetStatuses?: CharacterStatus[];
-    attributeRolls?: AttributeRoll[];
+    lastResolution: Resolution | null;
 };
 
-function DiceRoller({statuses, onUpdateStatus}: {statuses: CharacterStatus[]; onUpdateStatus: (characterId: string, field: keyof Omit<CharacterStatus, "id" | "tension">, value: string) => void}): ReactElement {
-    const [selectedCharacterId, setSelectedCharacterId] = useState<string>(statuses[0]?.id ?? "");
-    const [selectedAttribute, setSelectedAttribute] = useState<string>("strength");
-    const [modifiers, setModifiers] = useState<number>(0);
-    const [rollHistory, setRollHistory] = useState<DiceRoll[]>([]);
-    const [lastRoll, setLastRoll] = useState<DiceRoll | null>(null);
-    const [hopePenalty, setHopePenalty] = useState<number>(0);
+type ChatStateType = Record<string, never>;
+type InitStateType = Record<string, never>;
 
-    const attributes = ["strength", "agility", "wits", "empathy"];
+type ConfigType = Partial<Record<AbilityKey, number>> & {
+    difficultyBias?: number;
+    debugVisible?: boolean;
+    triggerSensitivity?: number;
+    // Legacy setting from the first draft. Kept so an older saved config still works.
+    minimumActionScore?: number;
+};
 
-    function rollDice(baseCount: number): number[] {
-        const dice: number[] = [];
-        for (let i = 0; i < baseCount; i++) {
-            dice.push(Math.floor(Math.random() * 6) + 1);
-        }
-        return dice;
-    }
+type SettingsType = Record<AbilityKey, number> & {
+    difficultyBias: number;
+    debugVisible: boolean;
+    triggerSensitivity: number;
+    minimumActionScore: number;
+};
 
-    function handleRoll(): void {
-        const diceCount = Math.max(1, 6 + modifiers);
-        const dice = rollDice(diceCount);
-        const roll: DiceRoll = {dice, modifiers};
-        setLastRoll(roll);
-        setRollHistory([roll, ...rollHistory]);
-        setHopePenalty(0);
-    }
+type Rule = {
+    ability: AbilityKey;
+    patterns: Array<{re: RegExp; weight: number}>;
+};
 
-    function handlePush(): void {
-        if (!lastRoll) return;
-        const rerollable = lastRoll.dice.filter((d) => d !== 1 && d !== 6);
-        if (rerollable.length === 0) {
-            setLastRoll({...lastRoll, dice: lastRoll.dice});
-            return;
-        }
-        const rerolled = rollDice(rerollable.length);
-        const newOnes = rerolled.filter((d) => d === 1).length;
-        const allDice = lastRoll.dice.filter((d) => d === 1 || d === 6).concat(rerolled);
-        const updatedRoll: DiceRoll = {dice: allDice, modifiers: lastRoll.modifiers};
-        setLastRoll(updatedRoll);
-        setRollHistory([updatedRoll, ...rollHistory]);
-        setHopePenalty(newOnes);
+const LABELS: Record<AbilityKey, string> = {
+    airmanship: "Airmanship",
+    combat: "Combat Maneuvering",
+    weapons: "Weapons",
+    awareness: "Situational Awareness",
+    systems: "Systems",
+    analysis: "Analysis",
+    intelligence: "Intelligence",
+    reflexes: "Reflexes",
+    composure: "Composure",
+    physique: "Physique",
+};
 
-        if (newOnes > 0 && selectedCharacterId) {
-            const selected = statuses.find((s) => s.id === selectedCharacterId);
-            if (selected) {
-                const currentHope = parseInt(selected.hope, 10) || 0;
-                const newHope = Math.max(0, currentHope - newOnes);
-                onUpdateStatus(selectedCharacterId, "hope", String(newHope));
-            }
-        }
-    }
+const OUTCOME_LABELS: Record<OutcomeKey, string> = {
+    YES_AND: "YES, AND...",
+    YES: "YES",
+    YES_BUT: "YES, BUT...",
+    NO: "NO",
+    NO_AND: "NO, AND...",
+};
 
-    const selected = statuses.find((s) => s.id === selectedCharacterId);
-    const successCount = lastRoll ? lastRoll.dice.filter((d) => d === 6).length : 0;
-    const partialCount = lastRoll ? lastRoll.dice.filter((d) => d >= 4 && d <= 5).length : 0;
+const RULES: Rule[] = [
+    {
+        ability: "combat",
+        patterns: [
+            {re: /\b(dogfight|merge|bfm|one[- ]circle|two[- ]circle|scissors|rolling scissors|flat scissors)\b/i, weight: 4},
+            {re: /\b(get|move|slide|pull|turn|maneuver)\b.{0,30}\b(behind|onto (his|her|their) six|on (his|her|their) six|into firing position)\b/i, weight: 4},
+            {re: /\b(overshoot|reversal|reverse|yo[- ]?yo|lag pursuit|lead pursuit|pure pursuit|energy fight|rate fight|radius fight)\b/i, weight: 4},
+            {re: /\b(evade|dodge|break|jink|shake|defeat)\b.{0,35}\b(missile|fighter|bandit|pursuer|lock|attack)\b/i, weight: 4},
+            {re: /\bforce\b.{0,25}\b(overshoot|mistake|break)\b/i, weight: 3},
+        ],
+    },
+    {
+        ability: "airmanship",
+        patterns: [
+            {re: /\b(bank|roll|climb|dive|descend|pitch|yaw|turn|pull up|level off|flare|trim)\b/i, weight: 2},
+            {re: /\b(take ?off|land|landing|touch down|carrier landing|trap|bolter|approach|formation|rejoin|refuel|aerial refuel)\b/i, weight: 3},
+            {re: /\b(terrain follow|nap[- ]of[- ]the[- ]earth|low level|fly through|thread)\b/i, weight: 3},
+            {re: /\b(cobra|kulbit|immelmann|split[- ]?s|barrel roll|aileron roll)\b/i, weight: 4},
+            {re: /\b(recover)\b.{0,20}\b(stall|spin|aircraft|jet|fighter)\b/i, weight: 4},
+        ],
+    },
+    {
+        ability: "weapons",
+        patterns: [
+            {re: /\b(fire|shoot|launch|pickle|release)\b.{0,35}\b(missile|gun|cannon|bomb|rocket|torpedo|weapon)\b/i, weight: 4},
+            {re: /\b(gun run|strafe|strafing|bombing run|missile shot|fox one|fox two|fox three|guns guns guns)\b/i, weight: 4},
+            {re: /\b(aim|lead|solution|pipper|lock|tone)\b.{0,30}\b(target|bandit|fighter|bomber|ship|vehicle)\b/i, weight: 3},
+            {re: /\b(hit|destroy|disable|shoot down)\b.{0,35}\b(target|bandit|fighter|bomber|aircraft|ship|radar|sam)\b/i, weight: 3},
+        ],
+    },
+    {
+        ability: "awareness",
+        patterns: [
+            {re: /\b(scan|search|look for|spot|find|locate|identify|tally|visual)\b/i, weight: 2},
+            {re: /\b(check|watch|monitor)\b.{0,25}\b(radar|rwr|scope|six|airspace|sky|threat|contacts)\b/i, weight: 3},
+            {re: /\b(missile warning|spike|nails|mud|bandit|bogey|contact)\b/i, weight: 2},
+            {re: /\b(keep track|maintain track|situational awareness|picture)\b/i, weight: 4},
+        ],
+    },
+    {
+        ability: "systems",
+        patterns: [
+            {re: /\b(radar|ecm|jammer|datalink|irst|ins|gps|tacan|iff|avionics|sensor|autopilot)\b/i, weight: 2},
+            {re: /\b(switch|set|configure|cycle|restart|reset|reboot|reroute|isolate)\b.{0,30}\b(radar|system|avionics|hydraulic|electrical|engine|sensor|weapon)\b/i, weight: 4},
+            {re: /\b(jam|spoof|break lock|countermeasure|chaff|flare)\b/i, weight: 3},
+            {re: /\b(damage control|emergency system|manual reversion)\b/i, weight: 4},
+        ],
+    },
+    {
+        ability: "analysis",
+        patterns: [
+            {re: /\b(analy[sz]e|assess|calculate|estimate|predict|anticipate|deduce|infer)\b/i, weight: 3},
+            {re: /\b(pattern|trajectory|intercept|geometry|closure|energy state|enemy tactic|flight path)\b/i, weight: 2},
+            {re: /\b(plan|plot|choose)\b.{0,30}\b(route|attack|approach|intercept|maneuver|escape)\b/i, weight: 3},
+            {re: /\b(work out|figure out)\b.{0,30}\b(what|where|how|why)\b/i, weight: 2},
+        ],
+    },
+    {
+        ability: "intelligence",
+        patterns: [
+            {re: /\b(remember|recall|recognize|know|understand)\b/i, weight: 2},
+            {re: /\b(engineer|repair|fix|improvise|jury[- ]rig|bypass)\b/i, weight: 3},
+            {re: /\b(technical|mechanical|aerodynamic|electrical|structural|weapons data|aircraft type)\b/i, weight: 2},
+            {re: /\b(solve|compute|derive)\b/i, weight: 3},
+        ],
+    },
+    {
+        ability: "reflexes",
+        patterns: [
+            {re: /\b(react|snap|instantly|immediately|last second|split second)\b/i, weight: 3},
+            {re: /\b(dodge|duck|jink|break hard|snap roll)\b/i, weight: 3},
+            {re: /\b(sudden|unexpected)\b.{0,25}\b(missile|attack|fire|obstacle|threat)\b/i, weight: 3},
+        ],
+    },
+    {
+        ability: "composure",
+        patterns: [
+            {re: /\b(stay calm|keep calm|steady|focus|concentrate|hold it together|keep control)\b/i, weight: 3},
+            {re: /\b(panic|fear|stress|shock|overwhelmed|disoriented)\b/i, weight: 2},
+            {re: /\b(under fire|taking fire|being chased|missile inbound)\b/i, weight: 2},
+        ],
+    },
+    {
+        ability: "physique",
+        patterns: [
+            {re: /\b(g[- ]?force|high[- ]?g|blackout|greyout|g[- ]loc|strain)\b/i, weight: 3},
+            {re: /\b(endure|withstand|hold breath|stay conscious)\b/i, weight: 3},
+            {re: /\b(injured|wounded|bleeding|pain|burned|broken)\b/i, weight: 2},
+            {re: /\b(climb|crawl|swim|run|carry|lift|drag|eject|parachute)\b/i, weight: 2},
+        ],
+    },
+];
 
-    return <div style={{
-        width: "100vw",
-        height: "100vh",
-        boxSizing: "border-box",
-        overflowY: "auto",
-        background: "linear-gradient(160deg, #f7f0df 0%, #d5e6f8 55%, #f4f7e8 100%)",
-        padding: "1.5rem",
-        color: "#1f2a3d",
-        fontFamily: "\"Trebuchet MS\", \"Segoe UI\", sans-serif"
-    }}>
-        <div style={{maxWidth: "900px", margin: "0 auto"}}>
-            <h1 style={{margin: "0 0 1rem 0"}}>Dice Roller</h1>
+const RISK_PATTERNS: RegExp[] = [
+    /\b(missile|sam|aaa|gunfire|under fire|taking fire|enemy|bandit|bogey|dogfight|attack|intercept|combat)\b/i,
+    /\b(canyon|tunnel|bridge|city|mountain|terrain|low altitude|low level|deck)\b/i,
+    /\b(damaged|engine out|engine failure|hydraulic|fire|stall|spin|flameout)\b/i,
+    /\b(storm|thunder|icing|night|fog|poor visibility|cloud)\b/i,
+    /\b(outnumbered|multiple missiles|saturation|ace|elite enemy)\b/i,
+];
 
-            <div style={{
-                border: "1px solid #98aec7",
-                borderRadius: "14px",
-                padding: "1rem",
-                background: "rgba(255, 255, 255, 0.84)",
-                boxShadow: "0 10px 26px rgba(37, 67, 102, 0.14)",
-                marginBottom: "1rem"
-            }}>
-                <div style={{display: "grid", gap: "0.75rem"}}>
-                    <label>Character
-                        <select value={selectedCharacterId} onChange={(e) => setSelectedCharacterId(e.target.value)} style={{width: "100%"}}>
-                            {statuses.map((s) => <option key={s.id} value={s.id}>{s.name || `Character ${s.id}`}</option>)}
-                        </select>
-                    </label>
-                    <label>Attribute
-                        <select value={selectedAttribute} onChange={(e) => setSelectedAttribute(e.target.value)} style={{width: "100%"}}>
-                            {attributes.map((attr) => <option key={attr} value={attr}>{attr.charAt(0).toUpperCase() + attr.slice(1)}</option>)}
-                        </select>
-                    </label>
-                    <label>Modifiers (add/remove dice)
-                        <div style={{display: "flex", gap: "0.5rem"}}>
-                            <button onClick={() => setModifiers((m) => m - 1)}>−</button>
-                            <input type="number" value={modifiers} onChange={(e) => setModifiers(parseInt(e.target.value, 10) || 0)} style={{flex: 1}} />
-                            <button onClick={() => setModifiers((m) => m + 1)}>+</button>
-                        </div>
-                    </label>
-                    <div><strong>Dice to roll:</strong> {Math.max(1, 6 + modifiers)}</div>
-                </div>
-                <button onClick={handleRoll} style={{marginTop: "1rem", padding: "0.5rem 1rem", background: "#4CAF50", color: "white", border: "none", borderRadius: "6px", cursor: "pointer"}}>Roll</button>
-            </div>
+const HARD_PATTERNS: RegExp[] = [
+    /\b(canyon|tunnel|under bridge|through the bridge|terrain masking|nap[- ]of[- ]the[- ]earth)\b/i,
+    /\b(damaged|engine out|engine failure|hydraulic failure|on fire|flameout|stall|spin)\b/i,
+    /\b(carrier landing|night landing|storm landing|aerial refuel)\b/i,
+    /\b(missile inbound|missile closing|multiple missiles|sam saturation|outnumbered)\b/i,
+];
 
-            {lastRoll && (
-                <div style={{
-                    border: "1px solid #98aec7",
-                    borderRadius: "14px",
-                    padding: "1rem",
-                    background: "rgba(255, 255, 255, 0.84)",
-                    boxShadow: "0 10px 26px rgba(37, 67, 102, 0.14)",
-                    marginBottom: "1rem"
-                }}>
-                    <h2>Last Roll</h2>
-                    <div style={{display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem"}}>
-                        {lastRoll.dice.map((d, i) => (
-                            <div key={i} style={{
-                                width: "40px",
-                                height: "40px",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                border: "2px solid #333",
-                                borderRadius: "4px",
-                                background: d === 6 ? "#90EE90" : d >= 4 ? "#FFD700" : d === 1 ? "#FFB6C6" : "#E8E8E8",
-                                fontWeight: "bold"
-                            }}>
-                                {d}
-                            </div>
-                        ))}
-                    </div>
-                    <div style={{marginBottom: "0.5rem"}}><strong>Successes (6s):</strong> {successCount}</div>
-                    <div style={{marginBottom: "0.5rem"}}><strong>Partial (4-5s):</strong> {partialCount}</div>
-                    {hopePenalty > 0 && <div style={{color: "#d9534f"}}><strong>Hope penalty from push:</strong> −{hopePenalty}</div>}
-                    <button onClick={handlePush} style={{marginTop: "0.75rem", padding: "0.5rem 1rem", background: "#FF9800", color: "white", border: "none", borderRadius: "6px", cursor: "pointer"}}>Push Roll</button>
-                </div>
-            )}
+const EXTREME_PATTERNS: RegExp[] = [
+    /\b(flat spin|both engines out|no controls|control failure|blind landing)\b/i,
+    /\b(tunnel)\b.{0,40}\b(damaged|missile|supersonic|afterburner)\b/i,
+    /\b(multiple missiles|sam saturation)\b.{0,40}\b(low altitude|damaged|outnumbered)\b/i,
+];
 
-            {rollHistory.length > 1 && (
-                <div style={{
-                    border: "1px solid #98aec7",
-                    borderRadius: "14px",
-                    padding: "1rem",
-                    background: "rgba(255, 255, 255, 0.84)",
-                    boxShadow: "0 10px 26px rgba(37, 67, 102, 0.14)"
-                }}>
-                    <h2>Roll History</h2>
-                    <div style={{display: "grid", gap: "0.5rem"}}>
-                        {rollHistory.slice(1).map((roll, i) => {
-                            const successes = roll.dice.filter((d) => d === 6).length;
-                            return <div key={i} style={{display: "flex", gap: "0.5rem", alignItems: "center", padding: "0.5rem", background: "#f9f9f9", borderRadius: "4px"}}>
-                                <div style={{flex: 1}}>Roll {rollHistory.length - i - 1}: {roll.dice.join(", ")}</div>
-                                <div style={{minWidth: "100px"}}>Successes: {successes}</div>
-                            </div>;
-                        })}
-                    </div>
-                </div>
-            )}
-        </div>
-    </div>;
+function clamp(min: number, max: number, value: number): number {
+    return Math.max(min, Math.min(max, value));
 }
 
-function CharacterStatusBoard({initialStatuses, onRoll, onClearRoll, onStatusesChange}: CharacterStatusBoardProps): ReactElement {
-    const [statuses, setStatuses] = useState<CharacterStatus[]>(initialStatuses);
-    const [view, setView] = useState<"status" | "roller">("status");
-    const [attributeRolls, setAttributeRolls] = useState<Map<string, AttributeRoll>>(new Map());
-
-    useEffect(() => {
-        setStatuses(initialStatuses);
-    }, [initialStatuses]);
-
-    useEffect(() => {
-        onStatusesChange?.(statuses);
-    }, [statuses, onStatusesChange]);
-
-    function updateField(characterId: string, field: keyof Omit<CharacterStatus, "id" | "tension">, value: string): void {
-        setStatuses((current) => current.map((status) => {
-            if (status.id !== characterId) {
-                return status;
-            }
-            return {...status, [field]: value};
-        }));
-    }
-
-    function updateTension(characterId: string, withName: string, value: string): void {
-        setStatuses((current) => current.map((status) => {
-            if (status.id !== characterId) {
-                return status;
-            }
-            return {
-                ...status,
-                tension: status.tension.map((entry) => {
-                    if (entry.with !== withName) {
-                        return entry;
-                    }
-                    return {...entry, value};
-                })
-            };
-        }));
-    }
-
-    function rollAttribute(characterId: string, attribute: string): void {
-        const status = statuses.find((s) => s.id === characterId);
-        if (!status) return;
-
-        const rawValue = Number((status as any)[attribute]);
-        const diceCount = Number.isFinite(rawValue) ? Math.max(0, Math.floor(rawValue)) : 0;
-
-        // Roll the dice
-        const dice: number[] = [];
-        for (let i = 0; i < diceCount; i++) {
-            dice.push(Math.floor(Math.random() * 6) + 1);
-        }
-
-        // Count successes (6s)
-        const successes = dice.filter((d) => d === 6).length;
-
-        // Create roll result
-        const roll: AttributeRoll = {
-            characterId,
-            attribute,
-            dice,
-            successes,
-            timestamp: Date.now(),
-        };
-
-        // Store the roll
-        const key = `${characterId}_${attribute}`;
-        setAttributeRolls((current) => new Map(current).set(key, roll));
-        
-        // Notify parent Stage of the roll
-        onRoll?.(roll);
-    }
-
-    function getRollResult(characterId: string, attribute: string): AttributeRoll | undefined {
-        const key = `${characterId}_${attribute}`;
-        return attributeRolls.get(key);
-    }
-
-    function clearRoll(characterId: string, attribute: string): void {
-        const key = `${characterId}_${attribute}`;
-        setAttributeRolls((current) => {
-            const next = new Map(current);
-            next.delete(key);
-            return next;
-        });
-        
-        // Notify parent Stage of the clear
-        onClearRoll?.(characterId, attribute);
-    }
-
-    if (view === "roller") {
-        return <DiceRoller statuses={statuses} onUpdateStatus={updateField} />;
-    }
-
-    return <div style={{
-        width: "100vw",
-        height: "100vh",
-        boxSizing: "border-box",
-        overflowY: "auto",
-        background: "linear-gradient(160deg, #f7f0df 0%, #d5e6f8 55%, #f4f7e8 100%)",
-        padding: "1.5rem",
-        color: "#1f2a3d",
-        fontFamily: "\"Trebuchet MS\", \"Segoe UI\", sans-serif"
-    }}>
-        <div style={{
-            maxWidth: "1200px",
-            margin: "0 auto"
-        }}>
-            <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem"}}>
-                <h1 style={{margin: 0}}>Character Status Window</h1>
-                <button onClick={() => setView(view === "status" ? "roller" : "status")} style={{padding: "0.5rem 1rem", background: "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer"}}>
-                    {view === "status" ? "Go to Roller" : "Back to Status"}
-                </button>
-            </div>
-            <p style={{margin: "0 0 1.25rem 0"}}>
-                Edit any field below for each active character in this chat.
-            </p>
-            <div style={{
-                display: "grid",
-                gap: "1rem",
-                gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))"
-            }}>
-                {statuses.map((status) => (
-                    <article key={status.id} style={{
-                        border: "1px solid #98aec7",
-                        borderRadius: "14px",
-                        padding: "1rem",
-                        background: "rgba(255, 255, 255, 0.84)",
-                        boxShadow: "0 10px 26px rgba(37, 67, 102, 0.14)"
-                    }}>
-                        <h2 style={{margin: "0 0 0.8rem 0"}}>{status.name || `Character ${status.id}`}</h2>
-                        <div style={{display: "grid", gap: "0.45rem"}}>
-                            <label>Archetype <input value={status.archetype} onChange={(event) => updateField(status.id, "archetype", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Favorite Song <input value={status.favoriteSong} onChange={(event) => updateField(status.id, "favoriteSong", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Description <textarea value={status.description} onChange={(event) => updateField(status.id, "description", event.target.value)} rows={2} style={{width: "100%"}} /></label>
-                            
-                            {["strength", "agility", "wits", "empathy"].map((attr) => {
-                                const roll = getRollResult(status.id, attr);
-                                return <div key={attr} style={{border: "1px solid #ddd", borderRadius: "4px", padding: "0.5rem", background: "#fafafa"}}>
-                                    <div style={{display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.25rem"}}>
-                                        <label style={{flex: 1}}>
-                                            {attr.charAt(0).toUpperCase() + attr.slice(1)} (Numerical)
-                                            <input type="number" value={(status as any)[attr]} onChange={(event) => updateField(status.id, attr as any, event.target.value)} style={{width: "100%"}} />
-                                        </label>
-                                        <button onClick={() => rollAttribute(status.id, attr)} style={{padding: "0.25rem 0.5rem", background: "#FF9800", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "0.9rem"}}>Roll</button>
-                                    </div>
-                                    {roll && (
-                                        <div style={{fontSize: "0.85rem", background: "white", padding: "0.25rem 0.5rem", borderRadius: "3px", display: "flex", justifyContent: "space-between", alignItems: "center"}}>
-                                            <span>
-                                                Dice: {roll.dice.join(", ")} | Successes: <strong>{roll.successes}</strong>
-                                                {roll.successes === 0 && <span style={{marginLeft: "0.5rem", color: "#d9534f"}}>FAILURE</span>}
-                                            </span>
-                                            <button onClick={() => clearRoll(status.id, attr)} style={{padding: "0.2rem 0.4rem", background: "#999", color: "white", border: "none", borderRadius: "3px", cursor: "pointer", fontSize: "0.75rem"}}>Clear</button>
-                                        </div>
-                                    )}
-                                </div>;
-                            })}
-
-                            <label>Health <input type="number" value={status.health} onChange={(event) => updateField(status.id, "health", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Hope <input type="number" value={status.hope} onChange={(event) => updateField(status.id, "hope", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Bliss <input type="number" value={status.bliss} onChange={(event) => updateField(status.id, "bliss", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Permanent <input value={status.permanent} onChange={(event) => updateField(status.id, "permanent", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Talents <input value={status.talents} onChange={(event) => updateField(status.id, "talents", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Dream <input value={status.dream} onChange={(event) => updateField(status.id, "dream", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Flaw <input value={status.flaw} onChange={(event) => updateField(status.id, "flaw", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Gear <input value={status.gear} onChange={(event) => updateField(status.id, "gear", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Cash <input type="number" value={status.cash} onChange={(event) => updateField(status.id, "cash", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Journey <input value={status.journey} onChange={(event) => updateField(status.id, "journey", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Goal <input value={status.goal} onChange={(event) => updateField(status.id, "goal", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Threat <input value={status.threat} onChange={(event) => updateField(status.id, "threat", event.target.value)} style={{width: "100%"}} /></label>
-                            <label>Injuries and Trauma <textarea value={status.injuriesAndTrauma} onChange={(event) => updateField(status.id, "injuriesAndTrauma", event.target.value)} rows={2} style={{width: "100%"}} /></label>
-                        </div>
-
-                        <section style={{marginTop: "0.9rem"}}>
-                            <h3 style={{margin: "0 0 0.4rem 0", fontSize: "1rem"}}>Tension</h3>
-                            {status.tension.length === 0 ? (
-                                <div>No other active characters in this chat.</div>
-                            ) : (
-                                <div style={{display: "grid", gap: "0.45rem"}}>
-                                    {status.tension.map((entry) => (
-                                        <label key={`${status.id}-${entry.with}`}>
-                                            {entry.with}
-                                            <input
-                                                type="number"
-                                                value={entry.value}
-                                                onChange={(event) => updateTension(status.id, entry.with, event.target.value)}
-                                                style={{width: "100%"}}
-                                            />
-                                        </label>
-                                    ))}
-                                </div>
-                            )}
-                        </section>
-                    </article>
-                ))}
-            </div>
-        </div>
-    </div>;
+function sensitivityToMinimumScore(sensitivity: number): number {
+    // UI is intuitive: a HIGHER sensitivity means MORE actions trigger.
+    // Internally, triggering uses a minimum keyword score, so the mapping is inverted.
+    const level = Math.round(clamp(1, 5, sensitivity));
+    return ({1: 5, 2: 4, 3: 3, 4: 2, 5: 1} as Record<number, number>)[level];
 }
 
-/***
- The type of the stage-specific configuration of this stage.
+function stripQuotedSpeech(text: string): string {
+    return text
+        .replace(/“[^”]*”/g, " ")
+        .replace(/"[^"]*"/g, " ")
+        .replace(/‘[^’]*’/g, " ");
+}
 
- @description This is for things you want people to be able to configure,
-  like background color.
- ***/
-type ConfigType = any;
+function isOutOfCharacter(text: string): boolean {
+    const t = text.trim();
+    return /^(ooc\s*:|\[ooc\]|\(ooc\)|\/ooc\b)/i.test(t);
+}
 
-/***
- The type that this stage persists chat initialization state in.
- If there is any 'constant once initialized' static state unique to a chat,
- like procedurally generated terrain that is only created ONCE and ONLY ONCE per chat,
- it belongs here.
- ***/
-type InitStateType = any;
+function scoreAbilities(text: string): Array<{ability: AbilityKey; score: number}> {
+    const scores = RULES.map(rule => {
+        const score = rule.patterns.reduce((sum, pattern) => sum + (pattern.re.test(text) ? pattern.weight : 0), 0);
+        return {ability: rule.ability, score};
+    });
+    return scores.sort((a, b) => b.score - a.score);
+}
 
-/***
- The type that this stage persists dynamic chat-level state in.
- This is for any state information unique to a chat,
-    that applies to ALL branches and paths such as clearing fog-of-war.
- It is usually unlikely you will need this, and if it is used for message-level
-    data like player health then it will enter an inconsistent state whenever
-    they change branches or jump nodes. Use MessageStateType for that.
- ***/
-type ChatStateType = any;
+function estimateDifficulty(text: string, bias: number): 0 | 1 | 2 | 3 {
+    if (EXTREME_PATTERNS.some(re => re.test(text))) {
+        return clamp(0, 3, 3 + bias) as 0 | 1 | 2 | 3;
+    }
 
-/***
- A simple example class that implements the interfaces necessary for a Stage.
- If you want to rename it, be sure to modify App.js as well.
- @link https://github.com/CharHubAI/chub-stages-ts/blob/main/src/types/stage.ts
- ***/
+    let difficulty = 1;
+    const hardHits = HARD_PATTERNS.reduce((sum, re) => sum + (re.test(text) ? 1 : 0), 0);
+    const riskHits = RISK_PATTERNS.reduce((sum, re) => sum + (re.test(text) ? 1 : 0), 0);
+
+    if (hardHits >= 1) difficulty = 2;
+    if (hardHits >= 2 || riskHits >= 3) difficulty = 3;
+
+    // Benign handling actions are routine unless another risk marker is present.
+    const routine = /\b(taxi|cruise|climb to|descend to|join formation|rejoin formation|normal landing|normal takeoff)\b/i.test(text);
+    if (routine && riskHits === 0 && hardHits === 0) difficulty = 0;
+
+    return clamp(0, 3, difficulty + bias) as 0 | 1 | 2 | 3;
+}
+
+function rollOutcome(primary: number, support: number, difficulty: number): {roll: number; target: number; outcome: OutcomeKey} {
+    // Lower is better. At Veteran (3) + Standard difficulty, this is roughly:
+    // 9% critical success, 50% normal success, 20% partial, 17% failure, 4% critical failure.
+    const target = Math.round(clamp(15, 90, 45 + primary * 8 + support * 2 - difficulty * 10));
+    const roll = Math.floor(Math.random() * 100) + 1;
+    const critSuccessCutoff = Math.round(clamp(2, 15, target * 0.15));
+
+    if (roll >= 97) return {roll, target, outcome: "NO_AND"};
+    if (roll <= critSuccessCutoff) return {roll, target, outcome: "YES_AND"};
+    if (roll <= target) return {roll, target, outcome: "YES"};
+    if (roll <= Math.min(96, target + 20)) return {roll, target, outcome: "YES_BUT"};
+    return {roll, target, outcome: "NO"};
+}
+
+function outcomeInstruction(outcome: OutcomeKey): string {
+    switch (outcome) {
+        case "YES_AND":
+            return "The intended action succeeds decisively, and it also creates a meaningful extra advantage, opening, information gain, positional gain, saved resource, or other favorable consequence.";
+        case "YES":
+            return "The intended action succeeds cleanly. Do not add an arbitrary penalty just to make the scene harder.";
+        case "YES_BUT":
+            return "The core intent succeeds, but attach one meaningful and immediate cost, complication, tradeoff, reduced effect, lost position, expended resource, damage, delay, or new threat.";
+        case "NO":
+            return "The intended action fails or does not achieve its goal. Keep the failure plausible and proportionate; do not automatically injure or kill the user character.";
+        case "NO_AND":
+            return "The intended action fails, and the failure also introduces a serious new complication appropriate to the fiction: worse position, damage, lost energy, separation, systems problem, enemy advantage, or comparable escalation.";
+    }
+}
+
+function difficultyLabel(value: number): string {
+    return ["Routine", "Standard", "Hard", "Extreme"][value] ?? "Standard";
+}
+
 export class Stage extends StageBase<InitStateType, ChatStateType, MessageStateType, ConfigType> {
-
-    /***
-     A very simple example internal state. Can be anything.
-     This is ephemeral in the sense that it isn't persisted to a database,
-     but exists as long as the instance does, i.e., the chat page is open.
-     ***/
-    myInternalState: {[key: string]: any};
-    private characterStatsCache: Map<string, InferredStats> = new Map();
-    private attributeRolls: Map<string, AttributeRoll> = new Map();
-
-    private toCharacterStatusList(): CharacterStatus[] {
-        const savedStatuses = Array.isArray(this.myInternalState["sheetStatuses"])
-            ? (this.myInternalState["sheetStatuses"] as CharacterStatus[])
-            : [];
-        const savedById = new Map(savedStatuses.map((status) => [status.id, status]));
-
-        const allCharacters = this.myInternalState["characters"] as AnyRecord;
-        const allUsers = this.myInternalState["users"] as AnyRecord;
-        const entries: Array<{id: string; character?: any; isUser?: boolean}> = [];
-
-        // Add all active characters
-        Object.entries(allCharacters ?? {})
-            .filter(([, character]) => !character?.isRemoved)
-            .forEach(([id, character]) => {
-                entries.push({id, character, isUser: false});
-            });
-
-        // Add user(s) as the first entry or primary participant
-        Object.entries(allUsers ?? {})
-            .filter(([, user]) => !user?.isRemoved)
-            .forEach(([id, user]) => {
-                entries.unshift({id: `user_${id}`, character: user, isUser: true});
-            });
-
-        const statusList: CharacterStatus[] = entries.map(({id, character, isUser}) => {
-            const ext = character?.partial_extensions?.chub ?? {};
-            const status = ext?.status ?? {};
-            const profile = character ?? {};
-            const saved = savedById.get(id);
-
-            // Try to get inferred stats from cache or use the explicit values
-            const inferredStats = this.characterStatsCache.get(id) || inferStatsFromCharacter(character || {});
-
-            const attributes = inferAttributesFromCharacter(character || {});
-
-            return {
-                id,
-                name: firstDefinedString([saved?.name, status.name, profile.name, profile.chatProfile], isUser ? "You" : ""),
-                archetype: firstDefinedString([saved?.archetype, status.archetype, attributes.archetype], ""),
-                favoriteSong: firstDefinedString([saved?.favoriteSong, status.favoriteSong, status.favorite_song], ""),
-                description: firstDefinedString([saved?.description, status.description, attributes.description, profile.description], ""),
-                strength: firstDefinedString([saved?.strength, String(status.strength ?? inferredStats.strength)], String(inferredStats.strength || "")),
-                agility: firstDefinedString([saved?.agility, String(status.agility ?? inferredStats.agility)], String(inferredStats.agility || "")),
-                wits: firstDefinedString([saved?.wits, String(status.wits ?? inferredStats.wits)], String(inferredStats.wits || "")),
-                empathy: firstDefinedString([saved?.empathy, String(status.empathy ?? inferredStats.empathy)], String(inferredStats.empathy || "")),
-                health: firstDefinedString([saved?.health, String(status.health ?? inferredStats.health)], String(inferredStats.health || "")),
-                hope: firstDefinedString([saved?.hope, String(status.hope ?? inferredStats.hope)], String(inferredStats.hope || "")),
-                bliss: firstDefinedString([saved?.bliss, String(status.bliss ?? inferredStats.bliss)], String(inferredStats.bliss || "")),
-                permanent: firstDefinedString([saved?.permanent, status.permanent], ""),
-                talents: firstDefinedString([saved?.talents, status.talents, attributes.talents], ""),
-                dream: firstDefinedString([saved?.dream, status.dream, attributes.dream], ""),
-                flaw: firstDefinedString([saved?.flaw, status.flaw, attributes.flaw], ""),
-                gear: firstDefinedString([saved?.gear, status.gear, attributes.gear], ""),
-                cash: firstDefinedString([saved?.cash, String(status.cash ?? "")], ""),
-                journey: firstDefinedString([saved?.journey, status.journey], ""),
-                goal: firstDefinedString([saved?.goal, status.goal], ""),
-                threat: firstDefinedString([saved?.threat, status.threat, attributes.threat], ""),
-                injuriesAndTrauma: firstDefinedString([saved?.injuriesAndTrauma, status.injuriesAndTrauma], ""),
-                tension: []
-            };
-        });
-
-        return statusList.map((status) => {
-            const saved = savedById.get(status.id);
-            const tensions = statusList
-                .filter((candidate) => candidate.id !== status.id)
-                .map((candidate) => {
-                    const savedTension = (saved?.tension ?? []).find((entry) => entry.with === candidate.name);
-                    return {
-                        with: candidate.name,
-                        value: savedTension?.value ?? ""
-                    };
-                });
-            return {...status, tension: tensions};
-        });
-    }
+    private state: MessageStateType;
+    private settings: SettingsType;
 
     constructor(data: InitialData<InitStateType, ChatStateType, MessageStateType, ConfigType>) {
-        /***
-         This is the first thing called in the stage,
-         to create an instance of it.
-         The definition of InitialData is at @link https://github.com/CharHubAI/chub-stages-ts/blob/main/src/types/initial.ts
-         Character at @link https://github.com/CharHubAI/chub-stages-ts/blob/main/src/types/character.ts
-         User at @link https://github.com/CharHubAI/chub-stages-ts/blob/main/src/types/user.ts
-         ***/
         super(data);
-        const {
-            characters,         // @type:  { [key: string]: Character }
-            users,                  // @type:  { [key: string]: User}
-            config,                                 //  @type:  ConfigType
-            messageState,                           //  @type:  MessageStateType
-            environment,                     // @type: Environment (which is a string)
-            initState,                             // @type: null | InitStateType
-            chatState                              // @type: null | ChatStateType
-        } = data;
-        this.myInternalState = messageState != null ? messageState : {'someKey': 'someValue'};
-        this.myInternalState['numUsers'] = Object.keys(users).length;
-        this.myInternalState['numChars'] = Object.keys(characters).length;
-        this.myInternalState['characters'] = characters;
-        this.myInternalState['users'] = users;
-        this.myInternalState['sheetStatuses'] = Array.isArray(this.myInternalState['sheetStatuses'])
-            ? this.myInternalState['sheetStatuses']
-            : [];
+        const c = data.config ?? {};
 
-        const persistedRolls = this.myInternalState['attributeRolls'];
-        if (Array.isArray(persistedRolls)) {
-            this.attributeRolls = new Map(
-                persistedRolls.map((roll: AttributeRoll) => [`${roll.characterId}_${roll.attribute}`, roll])
-            );
-        }
+        const triggerSensitivity = clamp(1, 5, c.triggerSensitivity ?? 3);
+        const legacyThreshold = c.minimumActionScore != null ? clamp(1, 6, c.minimumActionScore) : null;
+
+        this.settings = {
+            airmanship: clamp(0, 5, c.airmanship ?? 3),
+            combat: clamp(0, 5, c.combat ?? 3),
+            weapons: clamp(0, 5, c.weapons ?? 3),
+            awareness: clamp(0, 5, c.awareness ?? 3),
+            systems: clamp(0, 5, c.systems ?? 2),
+            analysis: clamp(0, 5, c.analysis ?? 3),
+            intelligence: clamp(0, 5, c.intelligence ?? 2),
+            reflexes: clamp(0, 5, c.reflexes ?? 3),
+            composure: clamp(0, 5, c.composure ?? 3),
+            physique: clamp(0, 5, c.physique ?? 3),
+            difficultyBias: clamp(-1, 1, c.difficultyBias ?? 0),
+            debugVisible: c.debugVisible ?? false,
+            triggerSensitivity,
+            minimumActionScore: legacyThreshold ?? sensitivityToMinimumScore(triggerSensitivity),
+        };
+
+        this.state = data.messageState ?? {lastResolution: null};
     }
 
     async load(): Promise<Partial<LoadResponse<InitStateType, ChatStateType, MessageStateType>>> {
-        /***
-         This is called immediately after the constructor, in case there is some asynchronous code you need to
-         run on instantiation.
-         ***/
-        
-        // Load character stats from YAML definitions if available
-        await this.preloadCharacterStats();
-        
         return {
-            /*** @type boolean @default null
-             @description The 'success' boolean returned should be false IFF (if and only if), some condition is met that means
-              the stage shouldn't be run at all and the iFrame can be closed/removed.
-              For example, if a stage displays expressions and no characters have an expression pack,
-              there is no reason to run the stage, so it would return false here. ***/
             success: true,
-            /*** @type null | string @description an error message to show
-             briefly at the top of the screen, if any. ***/
             error: null,
             initState: null,
             chatState: null,
         };
     }
 
-    /***
-     Preload character stats from YAML definitions
-     ***/
-    private async preloadCharacterStats(): Promise<void> {
-        const allCharacters = this.myInternalState["characters"] as AnyRecord;
-
-        for (const [id, character] of Object.entries(allCharacters ?? {})) {
-            if (character?.isRemoved) continue;
-
-            // Try to load stats from a YAML file if available
-            const characterName = character?.name?.toLowerCase().replace(/\s+/g, '_') || `character_${id}`;
-            const yamlPath = `/characters/${characterName}.yaml`;
-
-            try {
-                const yamlData = await loadCharacterYAML(yamlPath);
-                if (Object.keys(yamlData).length > 0) {
-                    const inferredStats = inferStatsFromCharacter(yamlData);
-                    this.characterStatsCache.set(id, inferredStats);
-                }
-            } catch (error) {
-                // Silently fail if YAML file not found, will use default inference
-            }
-        }
-    }
-
     async setState(state: MessageStateType): Promise<void> {
-        /***
-         This can be called at any time, typically after a jump to a different place in the chat tree
-         or a swipe. Note how neither InitState nor ChatState are given here. They are not for
-         state that is affected by swiping.
-         ***/
-        if (state != null) {
-            this.myInternalState = {...this.myInternalState, ...state};
-
-            if (Array.isArray(state.attributeRolls)) {
-                this.attributeRolls = new Map(
-                    state.attributeRolls.map((roll) => [`${roll.characterId}_${roll.attribute}`, roll])
-                );
-            }
-        }
-    }
-
-    /***
-     Register an attribute roll result
-     ***/
-    public registerAttributeRoll(roll: AttributeRoll): void {
-        const key = `${roll.characterId}_${roll.attribute}`;
-        this.attributeRolls.set(key, roll);
-    }
-
-    /***
-     Clear an attribute roll result
-     ***/
-    public clearAttributeRoll(characterId: string, attribute: string): void {
-        const key = `${characterId}_${attribute}`;
-        this.attributeRolls.delete(key);
-    }
-
-    /***
-     Get all attribute rolls
-     ***/
-    public getAttributeRolls(): Map<string, AttributeRoll> {
-        return this.attributeRolls;
+        this.state = state ?? {lastResolution: null};
     }
 
     async beforePrompt(userMessage: Message): Promise<Partial<StageResponse<ChatStateType, MessageStateType>>> {
-        /***
-         This is called after someone presses 'send', but before anything is sent to the LLM.
-         ***/
-        const {
-            content,            /*** @type: string
-             @description Just the last message about to be sent. ***/
-            anonymizedId,       /*** @type: string
-             @description An anonymized ID that is unique to this individual
-              in this chat, but NOT their Chub ID. ***/
-            isBot             /*** @type: boolean
-             @description Whether this is itself from another bot, ex. in a group chat. ***/
-        } = userMessage;
-        
-        // Generate stage directions based on current attribute rolls
-        let stageDirections: string | null = null;
-        if (this.attributeRolls && this.attributeRolls.size > 0) {
-            const rolls = Array.from(this.attributeRolls.values());
-            const rollDescriptions = rolls.map((roll) => {
-                const characterName = (this.myInternalState["characters"]?.[roll.characterId] as any)?.name || `Character ${roll.characterId}`;
-                if (roll.successes > 0) {
-                    return `${characterName} rolled their ${roll.attribute}: ${roll.successes} success${roll.successes > 1 ? "es" : ""} (dice: ${roll.dice.join(", ")})`;
-                } else {
-                    return `${characterName} rolled their ${roll.attribute}: FAILED (no 6s rolled) (dice: ${roll.dice.join(", ")})`;
-                }
-            }).join("\n");
-    
-            stageDirections = `Recent dice rolls have occurred:\n${rollDescriptions}\n\nBased on these results, describe what happens. For successes, describe a positive outcome. For failures, describe a complication or failure.`;
+        if (userMessage.isBot || !userMessage.content || isOutOfCharacter(userMessage.content)) {
+            return {messageState: this.state, stageDirections: null, modifiedMessage: null, systemMessage: null, error: null, chatState: null};
         }
 
+        const actionText = stripQuotedSpeech(userMessage.content);
+        const ranked = scoreAbilities(actionText);
+        const primary = ranked[0];
+
+        if (!primary || primary.score < this.settings.minimumActionScore) {
+            this.state = {lastResolution: null};
+            return {messageState: this.state, stageDirections: null, modifiedMessage: null, systemMessage: null, error: null, chatState: null};
+        }
+
+        const secondary = ranked.find(item => item.ability !== primary.ability && item.score > 0) ?? null;
+        const difficulty = estimateDifficulty(actionText, this.settings.difficultyBias);
+        const primaryScore = this.settings[primary.ability] as number;
+        const supportScore = secondary ? (this.settings[secondary.ability] as number) : 0;
+        const rolled = rollOutcome(primaryScore, supportScore, difficulty);
+
+        const resolution: Resolution = {
+            ability: primary.ability,
+            support: secondary?.ability ?? null,
+            difficulty,
+            roll: rolled.roll,
+            target: rolled.target,
+            outcome: rolled.outcome,
+        };
+        this.state = {lastResolution: resolution};
+
+        const supportLine = resolution.support ? `Supporting ability: ${LABELS[resolution.support]}.` : "Supporting ability: none.";
+        const stageDirections = [
+            "[ACE NARRATIVE RESOLUTION — HIDDEN MECHANICAL RESULT]",
+            "The user's attempted risky action has already been resolved mechanically. Treat this result as binding when narrating the immediate consequence.",
+            `Primary ability: ${LABELS[resolution.ability]}.`,
+            supportLine,
+            `Difficulty: ${difficultyLabel(resolution.difficulty)}.`,
+            `Outcome: ${OUTCOME_LABELS[resolution.outcome]}.`,
+            outcomeInstruction(resolution.outcome),
+            "Interpret the result naturally inside the current story and aviation context.",
+            "Do NOT reroll, override, soften, or reverse this result because of narrative preference.",
+            "Do NOT mention dice, target numbers, stats, ability names, the stage, or the phrase 'mechanical result' in the prose.",
+            "Do not literally say 'yes, and', 'yes', 'yes, but', 'no', or 'no, and' unless those words belong naturally in dialogue.",
+            "For dogfights, model position, energy, closure, sensors, weapons employment, damage, terrain, wingmen, and enemy skill plausibly. A successful maneuver need not automatically destroy an enemy; it achieves the user's stated intent and any extra effect implied by the outcome.",
+            "A partial success must preserve the user's core success while adding a real consequence. A critical failure should escalate the situation, not arbitrarily kill the user character.",
+            "Do not invent additional voluntary actions for the user character beyond what the user attempted. NPCs and the environment may react normally.",
+            "Social dialogue itself never requires a check from this system; only resolved physical, technical, cognitive, or piloting actions do.",
+            "[END ACE NARRATIVE RESOLUTION]",
+        ].join("\n");
+
+        const systemMessage = this.settings.debugVisible
+            ? `Resolver: ${OUTCOME_LABELS[resolution.outcome]} — ${LABELS[resolution.ability]}${resolution.support ? ` + ${LABELS[resolution.support]}` : ""}, ${difficultyLabel(resolution.difficulty)} (roll ${resolution.roll}, target ${resolution.target})`
+            : null;
+
         return {
-            /*** @type null | string @description A string to add to the
-             end of the final prompt sent to the LLM,
-             but that isn't persisted. ***/
-            stageDirections: stageDirections,
-            /*** @type MessageStateType | null @description the new state after the userMessage. ***/
-            messageState: {
-                someKey: this.myInternalState['someKey'],
-                sheetStatuses: this.myInternalState['sheetStatuses'] ?? [],
-                attributeRolls: Array.from(this.attributeRolls.values())
-            },
-            /*** @type null | string @description If not null, the user's message itself is replaced
-             with this value, both in what's sent to the LLM and in the database. ***/
+            stageDirections,
+            messageState: this.state,
             modifiedMessage: null,
-            /*** @type null | string @description A system message to append to the end of this message.
-             This is unique in that it shows up in the chat log and is sent to the LLM in subsequent messages,
-             but it's shown as coming from a system user and not any member of the chat. If you have things like
-             computed stat blocks that you want to show in the log, but don't want the LLM to start trying to
-             mimic/output them, they belong here. ***/
-            systemMessage: null,
-            /*** @type null | string @description an error message to show
-             briefly at the top of the screen, if any. ***/
+            systemMessage,
             error: null,
             chatState: null,
         };
     }
 
-    async afterResponse(botMessage: Message): Promise<Partial<StageResponse<ChatStateType, MessageStateType>>> {
-        /***
-         This is called immediately after a response from the LLM.
-         ***/
-        const {
-            content,            /*** @type: string
-             @description The LLM's response. ***/
-            anonymizedId,       /*** @type: string
-             @description An anonymized ID that is unique to this individual
-              in this chat, but NOT their Chub ID. ***/
-            isBot             /*** @type: boolean
-             @description Whether this is from a bot, conceivably always true. ***/
-        } = botMessage;
-        
-        // Generate stage directions showing roll results used in this response
-        let stageDirections: string | null = null;
-        if (this.attributeRolls && this.attributeRolls.size > 0) {
-            const rolls = Array.from(this.attributeRolls.values());
-            const rollDescriptions = rolls.map((roll) => {
-                const characterName = (this.myInternalState["characters"]?.[roll.characterId] as any)?.name || `Character ${roll.characterId}`;
-                if (roll.successes > 0) {
-                    return `✓ ${characterName}'s ${roll.attribute} roll: ${roll.successes} success${roll.successes > 1 ? "es" : ""} (${roll.dice.join(", ")})`;
-                } else {
-                    return `✗ ${characterName}'s ${roll.attribute} roll: FAILED (${roll.dice.join(", ")})`;
-                }
-            }).join("\n");
-            
-            stageDirections = `Dice Rolls Used:\n${rollDescriptions}`;
-        }
-
+    async afterResponse(_botMessage: Message): Promise<Partial<StageResponse<ChatStateType, MessageStateType>>> {
         return {
-            /*** @type null | string @description A string to add to the
-             end of the final prompt sent to the LLM,
-             but that isn't persisted. ***/
-            stageDirections: stageDirections,
-            /*** @type MessageStateType | null @description the new state after the botMessage. ***/
-            messageState: {
-                someKey: this.myInternalState['someKey'],
-                sheetStatuses: this.myInternalState['sheetStatuses'] ?? [],
-                attributeRolls: Array.from(this.attributeRolls.values())
-            },
-            /*** @type null | string @description If not null, the bot's response itself is replaced
-             with this value, both in what's sent to the LLM subsequently and in the database. ***/
+            stageDirections: null,
+            messageState: this.state,
             modifiedMessage: null,
-            /*** @type null | string @description an error message to show
-             briefly at the top of the screen, if any. ***/
-            error: null,
             systemMessage: null,
-            chatState: null
+            error: null,
+            chatState: null,
         };
     }
 
-
     render(): ReactElement {
-        /***
-         There should be no "work" done here. Just returning the React element to display.
-         If you're unfamiliar with React and prefer video, I've heard good things about
-         @link https://scrimba.com/learn/learnreact but haven't personally watched/used it.
-
-         For creating 3D and game components, react-three-fiber
-           @link https://docs.pmnd.rs/react-three-fiber/getting-started/introduction
-           and the associated ecosystem of libraries are quite good and intuitive.
-
-         Cuberun is a good example of a game built with them.
-           @link https://github.com/akarlsten/cuberun (Source)
-           @link https://cuberun.adamkarlsten.com/ (Demo)
-         ***/
-        const statuses = this.toCharacterStatusList();
-        return <CharacterStatusBoard 
-            initialStatuses={statuses}
-            onRoll={(roll) => this.registerAttributeRoll(roll)}
-            onClearRoll={(characterId, attribute) => this.clearAttributeRoll(characterId, attribute)}
-            onStatusesChange={(updated) => {
-                this.myInternalState['sheetStatuses'] = updated;
-            }}
-        />;
+        // This stage is intended to use position: NONE and run invisibly.
+        return <></>;
     }
-
 }
