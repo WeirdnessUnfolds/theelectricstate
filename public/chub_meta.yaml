@@ -1,265 +1,120 @@
-# All of these fields are optional, as is this file itself,
-#   in which case these values can be managed in the UI.
+project_name: "Ace Narrative Resolver"
+tagline: "Hidden five-outcome action resolution for aviation and combat roleplay."
+visibility: 'PRIVATE'
+position: 'NONE'
+tags:
+  - 'RPG'
+  - 'Combat'
+  - 'Aviation'
+  - 'Roleplay'
+  - 'Stage'
 
-# The name of the stage.
-# project_name: "Stage Template"
-
-# A short tagline to show in search.
-# tagline: "A base template for all stages."
-
-# 'PUBLIC', 'PRIVATE', or 'UNLISTED'.
-# visibility: 'PUBLIC'
-
-# 'ADJACENT' | 'NONE' | 'COVER' | 'FULLSCREEN'
-# 'ADJACENT' is default. The frame will display on the side of the
-#   chat on desktop and above/in the top half of the chat on mobile.
-# 'NONE' will not display, only run.
-# 'COVER' will, indeed, cover the chat history completely,
-#   but leave the text input box.
-# 'FULLSCREEN' will make nothing below the header bar
-#   show except for your stage.
-# position: 'ADJACENT'
-
-# Self-explanatory.
-# tags:
-#  - 'Stage'
-#  - 'Admin'
-#  - 'Template'
-#  - 'Base'
-
-# The schema of any user-supplied config.
-# If your stage requires a configuration but has no
-#   defined schema, it won't work.
 config_schema:
   type: object
+  title: Ace Narrative Resolver
+  description: >-
+    Scores use 0-5: 0 Untrained, 1 Novice, 2 Competent, 3 Veteran,
+    4 Elite, 5 Ace. The stage automatically chooses the most relevant ability
+    from the user's action, rolls a five-degree narrative outcome, and injects
+    it as hidden stage directions for the model.
   properties:
-    sheetStatuses:
-      type: array
-      default: []
-      items:
-        type: object
-        properties:
-          id:
-            type: string
-          name:
-            type: string
-            default: ''
-          archetype:
-            type: string
-            default: ''
-          favoriteSong:
-            type: string
-            default: ''
-          description:
-            type: string
-            default: ''
-          strength:
-            type: string
-            default: ''
-          agility:
-            type: string
-            default: ''
-          wits:
-            type: string
-            default: ''
-          empathy:
-            type: string
-            default: ''
-          health:
-            type: string
-            default: ''
-          hope:
-            type: string
-            default: ''
-          bliss:
-            type: string
-            default: ''
-          permanent:
-            type: string
-            default: ''
-          talents:
-            type: string
-            default: ''
-          dream:
-            type: string
-            default: ''
-          flaw:
-            type: string
-            default: ''
-          gear:
-            type: string
-            default: ''
-          cash:
-            type: string
-            default: ''
-          journey:
-            type: string
-            default: ''
-          goal:
-            type: string
-            default: ''
-          threat:
-            type: string
-            default: ''
-          injuriesAndTrauma:
-            type: string
-            default: ''
-          tension:
-            type: array
-            default: []
-            items:
-              type: object
-              properties:
-                with:
-                  type: string
-                value:
-                  type: string
-                  default: ''
-              required:
-                - with
-                - value
-        required:
-          - id
-    attributeRolls:
-      type: array
-      default: []
-      items:
-        type: object
-        properties:
-          characterId:
-            type: string
-          attribute:
-            type: string
-          dice:
-            type: array
-            items:
-              type: integer
-          successes:
-            type: integer
-          timestamp:
-            type: integer
-        required:
-          - characterId
-          - attribute
-          - dice
-          - successes
-          - timestamp
+    airmanship:
+      type: integer
+      title: Airmanship
+      description: General aircraft handling, formation, navigation, takeoff/landing, terrain flying and recovery.
+      minimum: 0
+      maximum: 5
+      default: 3
+    combat:
+      type: integer
+      title: Combat Maneuvering
+      description: BFM, energy management, reversals, pursuit geometry, missile evasion and positional fighting.
+      minimum: 0
+      maximum: 5
+      default: 3
+    weapons:
+      type: integer
+      title: Weapons
+      description: Guns, missiles, bombs, rockets, release timing, firing solutions and attack runs.
+      minimum: 0
+      maximum: 5
+      default: 3
+    awareness:
+      type: integer
+      title: Situational Awareness
+      description: Visual scan, threat detection, radar picture, tracking contacts and maintaining the tactical picture.
+      minimum: 0
+      maximum: 5
+      default: 3
+    systems:
+      type: integer
+      title: Systems
+      description: Radar, ECM, sensors, datalink, navigation equipment, countermeasures and damaged aircraft systems.
+      minimum: 0
+      maximum: 5
+      default: 2
+    analysis:
+      type: integer
+      title: Analysis
+      description: Tactical reasoning, prediction, geometry, route selection and reading an opponent's behavior.
+      minimum: 0
+      maximum: 5
+      default: 3
+    intelligence:
+      type: integer
+      title: Intelligence
+      description: Technical knowledge, memory, engineering, problem solving and improvisation.
+      minimum: 0
+      maximum: 5
+      default: 2
+    reflexes:
+      type: integer
+      title: Reflexes
+      description: Split-second reactions, sudden evasions and responding to unexpected threats.
+      minimum: 0
+      maximum: 5
+      default: 3
+    composure:
+      type: integer
+      title: Composure
+      description: Focus, stress resistance, remaining functional under fire and resisting panic or disorientation.
+      minimum: 0
+      maximum: 5
+      default: 3
+    physique:
+      type: integer
+      title: Physique
+      description: G tolerance, endurance, injury resistance and strenuous physical actions after ejection or on the ground.
+      minimum: 0
+      maximum: 5
+      default: 3
+    difficultyBias:
+      type: integer
+      title: Difficulty Bias
+      description: Global difficulty adjustment. -1 easier, 0 normal, +1 harder.
+      minimum: -1
+      maximum: 1
+      default: 0
+    triggerSensitivity:
+      type: integer
+      title: Action Detection Sensitivity
+      description: >-
+        Controls how readily prose triggers a resolution. 1 = Very Low (only very explicit actions),
+        2 = Low, 3 = Normal, 4 = High, 5 = Very High (even lightly implied actions may trigger).
+        Raise this if the resolver misses actions; lower it if ordinary narration causes unwanted rolls.
+      minimum: 1
+      maximum: 5
+      default: 3
+    debugVisible:
+      type: boolean
+      title: Show Resolver Debug Message
+      description: If enabled, show the chosen ability, difficulty, roll and outcome as a visible system message. Leave off for fully hidden resolution.
+      default: false
+  required: []
 
-# The schema of the state that you store.
-# This isn't needed even if you do store state,
-#   and is here more for future use cases to
-#   optimize storage.
 state_schema:
-  init:
-    type: object
-    properties:
-      grid:
-        type: string
   message:
     type: object
     properties:
-      someKey:
-        type: string
-      sheetStatuses:
-        type: array
-        items:
-          type: object
-          properties:
-            id:
-              type: string
-            name:
-              type: string
-            archetype:
-              type: string
-            favoriteSong:
-              type: string
-            description:
-              type: string
-            strength:
-              type: string
-            agility:
-              type: string
-            wits:
-              type: string
-            empathy:
-              type: string
-            health:
-              type: string
-            hope:
-              type: string
-            bliss:
-              type: string
-            permanent:
-              type: string
-            talents:
-              type: string
-            dream:
-              type: string
-            flaw:
-              type: string
-            gear:
-              type: string
-            cash:
-              type: string
-            journey:
-              type: string
-            goal:
-              type: string
-            threat:
-              type: string
-            injuriesAndTrauma:
-              type: string
-            tension:
-              type: array
-              items:
-                type: object
-                properties:
-                  with:
-                    type: string
-                  value:
-                    type: string
-      attributeRolls:
-        type: array
-        items:
-          type: object
-          properties:
-            characterId:
-              type: string
-            attribute:
-              type: string
-            dice:
-              type: array
-              items:
-                type: integer
-            successes:
-              type: integer
-            timestamp:
-              type: integer
-  chat:
-    type: object
-    properties:
-      visited:
-        type: array
-        items:
-          type: integer
-
-# Whether to publish as 'Anonymous' instead of under your username.
-# is_anonymous: false
-
-# Self-explanatory.
-# ratings_disabled: false
-
-# This is here for future cases where ex. you need user secrets,
-#    but currently does nothing.
-# permissions:
-
-# extension_id is automatically generated on push with a new project;
-#    you should not make or set this value.
-# github_path will be added if it does not exist. It is the URL of the repo.
-
-
-github_path: 'https://github.com/WeirdnessUnfolds/theelectricstate'
-
-
-extension_id: 'theelectricstate-b47bb4d0a567'
-
+      lastResolution:
+        type: object
